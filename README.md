@@ -15,6 +15,8 @@ Abdulrahman Awad | 101256090 | abdulrahmanawad@cmail.carleton.ca
 Igor Tascu | 101181093 | igortascu@cmail.carleton.ca
 Antony Ren | 101151779 | antonyren@cmail.carleton.ca
 
+_______
+
 ### Dataset:
 
 Victor Cacciari Miraldo. (2020). Dataset of merge conflicts collected from GitHub repositories [Data set]. Zenodo. https://doi.org/10.5281/zenodo.3751038
