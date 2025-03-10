@@ -1,0 +1,1797 @@
+from sympy.polys.domains import QQ, EX, ExpressionDomain
+from sympy.polys.rings import PolyElement, ring
+from sympy.polys.polyerrors import DomainError
+from sympy.polys.monomials import (monomial_min, monomial_mul, monomial_div,
+    monomial_ldiv)
+from mpmath.libmp.libintmath import ifac
+from sympy.core.numbers import Rational
+from sympy.core.power import Pow
+from sympy.core.compatibility import as_int, range
+from sympy.core import S, evaluate
+from sympy.functions import sin, cos, tan, atan, exp, atanh, tanh, log
+from sympy.functions import ceiling
+from mpmath.libmp.libintmath import giant_steps
+import math
+from functools import wraps
+from sympy.core.numbers import igcd
+
+
+def _invert_monoms(p1):
+    """
+    Compute ``x**n * p1(1/x)`` for a univariate polynomial ``p1`` in x.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import ZZ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import _invert_monoms
+    >>> R, x = ring('x', ZZ)
+    >>> p = x**2 + 2*x + 3
+    >>> _invert_monoms(p)
+    3*x**2 + 2*x + 1
+
+    See Also
+    ========
+
+    sympy.polys.densebasic.dup_reverse
+
+    """
+    terms = list(p1.items())
+    terms.sort()
+    deg = p1.degree()
+    R = p1.ring
+    p = R.zero
+    cv = p1.listcoeffs()
+    mv = p1.listmonoms()
+    for i in range(len(mv)):
+        p[(deg - mv[i][0],)] = cv[i]
+    return p
+
+def _giant_steps(target):
+    """
+    Return a list of precision steps for the Newton's method
+
+    """
+    res = giant_steps(2, target)
+    if res[0] != 2:
+        res = [2] + res
+    return res
+
+def rs_trunc(p1, x, prec):
+    """
+    Truncate the series in the ``x`` variable with precision ``prec``,
+    that is, modulo ``O(x**prec)``
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_trunc
+    >>> R, x = ring('x', QQ)
+    >>> p = x**10 + x**5 + x + 1
+    >>> rs_trunc(p, x, 12)
+    x**10 + x**5 + x + 1
+    >>> rs_trunc(p, x, 10)
+    x**5 + x + 1
+    """
+    R = p1.ring
+    p = R.zero
+    i = R.gens.index(x)
+    for exp1 in p1:
+        if exp1[i] >= prec:
+            continue
+        p[exp1] = p1[exp1]
+    return p
+
+def rs_is_regular(p, x):
+    """
+    """
+    ii = p.ring.gens.index(x)
+    n = 1
+    for k in p:
+        if k[ii] != int(k[ii]):
+            return False
+    return True
+
+def rs_puiseux(f, p, x, prec):
+    """
+    Return the puiseux series for `f(p, x, prec)` when `f` is implemented only for regular series
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_puiseux, rs_exp
+    >>> R, x = ring('x', QQ)
+    >>> p = x**QQ(2,5) + x**QQ(2,3) + x
+    >>> rs_puiseux(rs_exp,p, x, 1)
+    1/2*x**(4/5) + x**(2/3) + x**(2/5) + 1
+
+    """
+    ii = p.ring.gens.index(x)
+    n = 1
+    for k in p:
+        power = k[ii]
+        if isinstance(power, Rational):
+            num, den = power.as_numer_denom()
+            n = n*den // igcd(n, den)
+        elif power != int(power):
+            num, den = power.numerator, power.denominator
+            n = n*den // igcd(n, den)
+    if n != 1:
+        p1 = pow_xin(p, ii, n)
+        r = f(p1, x, prec*n)
+        n1 = QQ(1, n)
+        r = pow_xin(r, ii, n1)
+    else:
+        r = f(p, x, prec)
+    return r
+
+def rs_puiseux2(f, p, q, x, prec):
+    """
+    Return the puiseux series for `f(p, x, prec)` when `f` is implemented only for regular series
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_puiseux, rs_exp
+    >>> R, x = ring('x', QQ)
+    >>> p = x**QQ(2,5) + x**QQ(2,3) + x
+    >>> rs_puiseux(rs_exp,p, x, 1)
+    1/2*x**(4/5) + x**(2/3) + x**(2/5) + 1
+
+    """
+    ii = p.ring.gens.index(x)
+    n = 1
+    for k in p:
+        power = k[ii]
+        if isinstance(power, Rational):
+            num, den = power.as_numer_denom()
+            n = n*den // igcd(n, den)
+        elif power != int(power):
+            num, den = power.numerator, power.denominator
+            n = n*den // igcd(n, den)
+    if n != 1:
+        p1 = pow_xin(p, ii, n)
+        r = f(p1, q, x, prec*n)
+        n1 = QQ(1, n)
+        r = pow_xin(r, ii, n1)
+    else:
+        r = f(p, q, x, prec)
+    return r
+
+
+def rs_puiseux3(f, p, x, prec):
+    """
+    Return the puiseux series for `f(p, x, prec)` when `f` is implemented only for regular series
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_puiseux, rs_exp
+    >>> R, x = ring('x', QQ)
+    >>> p = x**QQ(2,5) + x**QQ(2,3) + x
+    >>> rs_puiseux(rs_exp,p, x, 1)
+    1/2*x**(4/5) + x**(2/3) + x**(2/5) + 1
+
+    """
+    ii = p.ring.gens.index(x)
+    n = 1
+    for k in p:
+        power = k[ii]
+        if isinstance(power, Rational):
+            num, den = power.as_numer_denom()
+            n = n*den // igcd(n, den)
+        elif power != int(power):
+            num, den = power.numerator, power.denominator
+            n = n*den // igcd(n, den)
+    if n != 1:
+        p1 = pow_xin(p, ii, n)
+        r = f(p1, x, prec*n)
+        n1 = QQ(1, n)
+        r = [pow_xin(rx, ii, n1) for rx in r]
+    else:
+        r = f(p, x, prec)
+    return r
+
+def rs_mul(p1, p2, x, prec):
+    """
+    Return the product of the given two series, modulo ``O(x**prec)``
+
+    ``x`` is the series variable or its position in the generators.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_mul
+    >>> R, x = ring('x', QQ)
+    >>> p1 = x**2 + 2*x + 1
+    >>> p2 = x + 1
+    >>> rs_mul(p1, p2, x, 3)
+    3*x**2 + 3*x + 1
+    """
+    R = p1.ring
+    p = R.zero
+    if R.__class__ != p2.ring.__class__ or R != p2.ring:
+        raise ValueError('p1 and p2 must have the same ring')
+    iv = R.gens.index(x)
+    if not isinstance(p2, PolyElement):
+        raise ValueError('p1 and p2 must have the same ring')
+    if R == p2.ring:
+        get = p.get
+        items2 = list(p2.items())
+        items2.sort(key=lambda e: e[0][iv])
+        if R.ngens == 1:
+            for exp1, v1 in p1.items():
+                for exp2, v2 in items2:
+                    exp = exp1[0] + exp2[0]
+                    if exp < prec:
+                        exp = (exp, )
+                        p[exp] = get(exp, 0) + v1*v2
+                    else:
+                        break
+        else:
+            monomial_mul = R.monomial_mul
+            for exp1, v1 in p1.items():
+                for exp2, v2 in items2:
+                    if exp1[iv] + exp2[iv] < prec:
+                        exp = monomial_mul(exp1, exp2)
+                        p[exp] = get(exp, 0) + v1*v2
+                    else:
+                        break
+
+    p.strip_zero()
+    return p
+
+def rs_square(p1, x, prec):
+    """
+    Square the series modulo ``O(x**prec)``
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_square
+    >>> R, x = ring('x', QQ)
+    >>> p = x**2 + 2*x + 1
+    >>> rs_square(p, x, 3)
+    6*x**2 + 4*x + 1
+    """
+    R = p1.ring
+    p = R.zero
+    iv = R.gens.index(x)
+    get = p.get
+    items = list(p1.items())
+    items.sort(key=lambda e: e[0][iv])
+    monomial_mul = R.monomial_mul
+    for i in range(len(items)):
+        exp1, v1 = items[i]
+        for j in range(i):
+            exp2, v2 = items[j]
+            if exp1[iv] + exp2[iv] < prec:
+                exp = monomial_mul(exp1, exp2)
+                p[exp] = get(exp, 0) + v1*v2
+            else:
+                break
+    p = p.imul_num(2)
+    get = p.get
+    for expv, v in p1.items():
+        if 2*expv[iv] < prec:
+            e2 = monomial_mul(expv, expv)
+            p[e2] = get(e2, 0) + v**2
+    p.strip_zero()
+    return p
+
+def rs_pow(p1, n, x, prec):
+    """
+    Return ``p1**n`` modulo ``O(x**prec)``
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_pow
+    >>> R, x = ring('x', QQ)
+    >>> p = x + 1
+    >>> rs_pow(p, 4, x, 3)
+    6*x**2 + 4*x + 1
+    """
+    R = p1.ring
+    p = R.zero
+    if isinstance(n, Rational):
+        raise NotImplementedError('to be implemented')
+
+    n = as_int(n)
+    if n == 0:
+        if p1:
+            return R(1)
+        else:
+            raise ValueError('0**0 is undefined')
+    if n < 0:
+        p1 = rs_pow(p1, -n, x, prec)
+        return rs_series_inversion(p1, x, prec)
+    if n == 1:
+        return rs_trunc(p1, x, prec)
+    if n == 2:
+        return rs_square(p1, x, prec)
+    if n == 3:
+        p2 = rs_square(p1, x, prec)
+        return rs_mul(p1, p2, x, prec)
+    p = R(1)
+    while 1:
+        if n&1:
+            p = rs_mul(p1, p, x, prec)
+            n -= 1
+            if not n:
+                break
+        p1 = rs_square(p1, x, prec)
+        n = n // 2
+    return p
+
+def rs_subs(p, rules, x, prec):
+    """
+    Substitution with truncation according to the mapping in `rules`.
+    Returns a series with precision `prec` in the generator `x`
+
+      p:     input polynomial
+      rules: dict with substitution mappings
+      x:     variable in which the series truncation is done
+      prec:  order of the truncation
+
+    Note that substitutions are not done one after the other
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_subs
+    >>> R, x, y = ring('x, y', QQ)
+    >>> p = x**2 + y**2
+    >>> rs_subs(p, {x: x+ y, y: x+ 2*y}, x, 3)
+    2*x**2 + 6*x*y + 5*y**2
+    >>> (x + y)**2 + (x + 2*y)**2
+    2*x**2 + 6*x*y + 5*y**2
+
+    which differs from
+
+    >>> rs_subs(rs_subs(p, {x: x+ y}, x, 3), {y: x+ 2*y}, x, 3)
+    5*x**2 + 12*x*y + 8*y**2
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_subs
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_subs(x**2+y**2, {y: (x+y)**2}, x, 3)
+     6*x**2*y**2 + x**2 + 4*x*y**3 + y**4
+    """
+    R = p.ring
+    ngens = R.ngens
+    d = R(0)
+    for i in range(R.ngens):
+        d[(i, 1)] = R.gens[i]
+    for var in rules:
+        d[(R.index(var), 1)] = rules[var]
+    p1 = R(0)
+    p_keys = sorted(p.keys())
+    for expv in p_keys:
+        p2 = R(1)
+        for i in range(ngens):
+            power = expv[i]
+            if power == 0:
+                continue
+            if (i, power) not in d:
+                q, r = divmod(power, 2)
+                if r == 0 and (i, q) in d:
+                    d[(i, power)] = rs_square(d[(i, q)], x, prec)
+                elif (i, power - 1) in d:
+                    d[(i, power)] = rs_mul(d[(i, power - 1)], d[(i, 1)], \
+                        x, prec)
+                else:
+                    d[(i, power)] = rs_pow(d[(i, 1)], power, x, prec)
+            p2 = rs_mul(p2, d[(i, power)], x, prec)
+        p1 += p2*p[expv]
+    return p1
+
+def _has_constant_term(p, x):
+    """
+    Check if ``p`` has a constant term in ``x``
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import _has_constant_term
+    >>> R, x = ring('x', QQ)
+    >>> p = x**2 + x + 1
+    >>> _has_constant_term(p, x)
+    True
+    """
+    R = p.ring
+    iv = R.gens.index(x)
+    zm = R.zero_monom
+    a = [0]*R.ngens
+    a[iv] = 1
+    miv = tuple(a)
+    for expv in p:
+        if monomial_min(expv, miv) == zm:
+            return True
+    return False
+
+def _check_series_var(p, iv, name):
+    ii = p.ring.gens.index(iv)
+    m = min(p, key=lambda k: k[ii])[ii]
+    if m < 0:
+        raise PoleError('Asymptotic expansion of %s around [oo] not implemented.' % name)
+    return ii, m
+
+def _series_inversion1(p, x, prec):
+    """
+    Univariate series inversion ``1/p`` modulo ``O(x**prec)``
+
+    The Newton method is used.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import _series_inversion1
+    >>> R, x = ring('x', QQ)
+    >>> p = x + 1
+    >>> _series_inversion1(p, x, 4)
+    -x**3 + x**2 - x + 1
+
+    """
+    reg = rs_is_regular(p, x)
+    if not reg:
+        return rs_puiseux(_series_inversion1, p, x, prec)
+    R = p.ring
+    zm = R.zero_monom
+    c = p[zm]
+
+    # giant_steps does not seem to work with PythonRational numbers with 1 as
+    # denominator. This makes sure such a number is converted to integer.
+    if prec == int(prec):
+        prec = int(prec)
+
+    if zm not in p:
+        raise ValueError('no constant term in series')
+    if _has_constant_term(p - c, x):
+        raise ValueError('p cannot contain a constant term depending on '
+            'parameters')
+    one = R(1)
+    if R.domain is EX:
+        one = 1
+    if c != one:
+        # TODO add check that it is a unit
+        p1 = R(1)/c
+    else:
+        p1 = R(1)
+    for precx in _giant_steps(prec):
+        t = 1 - rs_mul(p1, p, x, precx)
+        p1 = p1 + rs_mul(p1, t, x, precx)
+    return p1
+
+
+def rs_series_inversion(p, x, prec):
+    """
+    Multivariate series inversion ``1/p`` modulo ``O(x**prec)``
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_series_inversion
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_series_inversion(1 + x*y**2, x, 4)
+    -x**3*y**6 + x**2*y**4 - x*y**2 + 1
+    >>> rs_series_inversion(1 + x*y**2, y, 4)
+    -x*y**2 + 1
+    >>> rs_series_inversion(x + x**2, x, 4)
+    x**3 - x**2 + x - 1 + x**-1
+    """
+    R = p.ring
+    zm = R.zero_monom
+    ii = R.gens.index(x)
+    m = min(p, key=lambda k: k[ii])[ii]
+    if m:
+        p = mul_xin(p, ii, -m)
+        prec = prec + m
+    if zm not in p:
+        raise NotImplementedError('no constant term in series')
+
+    if _has_constant_term(p - p[zm], x):
+        raise NotImplementedError('p - p[0] must not have a constant term in the series variables')
+    r = _series_inversion1(p, x, prec)
+    if m != 0:
+        r = mul_xin(r, ii, -m)
+    return r
+
+
+def _coefficient_t(p, t):
+    """
+    Coefficient of `x_i**j` in p, where t = (i, j)
+    """
+    i, j = t
+    ring = p.ring
+    expv1 = [0]*ring.ngens
+    expv1[i] = j
+    expv1 = tuple(expv1)
+    p1 = ring(0)
+    for expv in p:
+        if expv[i] == j:
+            p1[monomial_div(expv, expv1)] = p[expv]
+    return p1
+
+def rs_series_reversion(p, x, n, y):
+    """
+    Reversion of a series
+
+    p is a series with O(x**n) of the form p = a*x + f(x)
+    where `a` is a number different from 0
+
+    f(x) = sum( a_k*x_k, k in range(2, n))
+
+      a_k can depend polynomially on other variables, not indicated.
+      x: variable with name x
+      y: variable with name y
+
+    Solve p = y, that is, given a*x + f(x) - y = 0,
+    find the solution x = r(y) up to O(y**n)
+
+    Algorithm:
+
+    If r_i is the solution at order i, then:
+    a*r_i + f(r_i) - y = O(y**(i + 1))
+
+    and if r_(i + 1) is the solution at order i + 1, then:
+    a*r_(i + 1) + f(r_(i + 1)) - y = O(y**(i + 2))
+
+    We have, r_(i + 1) = r_i + e, such that,
+    a*e + f(r_i) = O(y**(i + 2))
+    or e = -f(r_i)/a
+
+    So we use the recursion relation:
+    r_(i + 1) = r_i -f(r_i)/a
+    with the boundary condition: r_1 = y
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_series_reversion, rs_trunc
+    >>> R, x, y, a, b = ring('x, y, a, b', QQ)
+    >>> p = x - x**2 - 2*b*x**2 + 2*a*b*x**2
+    >>> p1 = rs_series_reversion(p, x, 3, y); p1
+    -2*y**2*a*b + 2*y**2*b + y**2 + y
+    >>> rs_trunc(p.compose(x, p1), y, 3)
+    y
+    """
+    ring = p.ring
+    nx = ring.gens.index(x)
+    y = ring(y)
+    ny = ring.gens.index(y)
+    if _has_constant_term(p, x):
+        raise ValueError('p must not contain a constant term in the series \
+            variable')
+    a = _coefficient_t(p, (nx, 1))
+    zm = ring.zero_monom
+    assert zm in a and len(a) == 1
+    a = a[zm]
+    r = y/a
+    for i in range(2, n):
+        sb = p
+        sp = rs_subs(p, {x: r}, y, i + 1)
+        sp = _coefficient_t(sp, (ny, i))*y**i
+        r -= sp/a
+    return r
+
+def rs_series_from_list(p, c, x, prec, concur=1):
+    """
+    Return a series ``sum c[n]*p**n`` modulo ``O(x**prec)``
+
+    It reduces the number of multiplications by summing concurrently
+    ``ax = [1, p, p**2, .., p**(J - 1)]``
+    ``s = sum(c[i]*ax[i] for i in range(r, (r + 1)*J)) * p**((K - 1)*J)``
+    with ``K >= (n + 1)/J``
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_series_from_list, rs_trunc
+    >>> R, x = ring('x', QQ)
+    >>> p = x**2 + x + 1
+    >>> c = [1, 2, 3]
+    >>> rs_series_from_list(p, c, x, 4)
+    6*x**3 + 11*x**2 + 8*x + 6
+    >>> rs_trunc(1 + 2*p + 3*p**2, x, 4)
+    6*x**3 + 11*x**2 + 8*x + 6
+    >>> pc = R.from_list(list(reversed(c)))
+    >>> rs_trunc(pc.compose(x, p), x, 4)
+    6*x**3 + 11*x**2 + 8*x + 6
+
+    See Also
+    ========
+
+    sympy.polys.ring.compose
+
+    """
+    R = p.ring
+    n = len(c)
+    if not concur:
+        q = R(1)
+        s = c[0]*q
+        for i in range(1, n):
+            q = rs_mul(q, p, x, prec)
+            s += c[i]*q
+        return s
+    J = int(math.sqrt(n) + 1)
+    K, r = divmod(n, J)
+    if r:
+        K += 1
+    ax = [R(1)]
+    b = 1
+    q = R(1)
+    if len(p) < 20:
+        for i in range(1, J):
+            q = rs_mul(q, p, x, prec)
+            ax.append(q)
+    else:
+        for i in range(1, J):
+            if i % 2 == 0:
+                q = rs_square(ax[i//2], x, prec)
+            else:
+                q = rs_mul(q, p, x, prec)
+            ax.append(q)
+    # optimize using rs_square
+    pj = rs_mul(ax[-1], p, x, prec)
+    b = R(1)
+    s = R(0)
+    for k in range(K - 1):
+        r = J*k
+        s1 = c[r]
+        for j in range(1, J):
+            s1 += c[r + j]*ax[j]
+        s1 = rs_mul(s1, b, x, prec)
+        s += s1
+        b = rs_mul(b, pj, x, prec)
+        if not b:
+            break
+    k = K - 1
+    r = J*k
+    if r < n:
+        s1 = c[r]*R(1)
+        for j in range(1, J):
+            if r + j >= n:
+                break
+            s1 += c[r + j]*ax[j]
+        s1 = rs_mul(s1, b, x, prec)
+        s += s1
+    return s
+
+def rs_diff(p, x):
+    """
+    Computes partial derivative of p with respect to x
+
+      `x`: variable with respect to which p is differentiated,
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_diff
+    >>> R, x, y = ring('x, y', QQ)
+    >>> p = x + x**2*y**3
+    >>> rs_diff(p, x)
+    2*x*y**3 + 1
+    """
+    R = p.ring
+    n = R.gens.index(x)
+    p1 = R.zero
+    mn = [0]*R.ngens
+    mn[n] = 1
+    mn = tuple(mn)
+    for expv in p:
+        if expv[n]:
+            e = monomial_ldiv(expv, mn)
+            p1[e] = p[expv]*expv[n]
+    return p1
+
+def rs_integrate(p, x):
+    """
+    Integrate ``p`` with respect to ``x``
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_integrate
+    >>> R, x, y = ring('x, y', QQ)
+    >>> p = x + x**2*y**3
+    >>> rs_integrate(p, x)
+    1/3*x**3*y**3 + 1/2*x**2
+    """
+    R = p.ring
+    p1 = R.zero
+    n = R.gens.index(x)
+    mn = [0]*R.ngens
+    mn[n] = 1
+    mn = tuple(mn)
+
+    for expv in p:
+        e = monomial_mul(expv, mn)
+        p1[e] = p[expv]/(expv[n] + 1)
+    return p1
+
+def rs_fun(p, f, *args):
+    """
+    Function of a multivariate series computed by substitution
+
+      p: multivariate series
+      f: method name or function
+      args[:-2] arguments of f, apart from the first one
+      args[-2] = iv: names of the series variables
+      args[-1] = prec: list of the precisions of the series variables
+
+    The case with f method name is used to compute rs_tan and rs_nth_root
+    of a multivariate series:
+
+      rs_fun(p, tan, iv, prec)
+      tan series is first computed for a dummy variable _x, ie, tan(_x, iv, prec)
+      Then we substitute _x with p to get the desired series
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_fun, _tan1
+    >>> R, x, y = ring('x, y', QQ)
+    >>> p = x + x*y + x**2*y + x**3*y**2
+    >>> rs_fun(p, _tan1, x, 4)
+    1/3*x**3*y**3 + 2*x**3*y**2 + x**3*y + 1/3*x**3 + x**2*y + x*y + x
+
+    """
+    _R = p.ring
+    R1, _x = ring('_x', _R.domain)
+    h = int(args[-1])
+    args1 = args[:-2] + (_x, h)
+    zm = _R.zero_monom
+    # separate the constant term of the series
+    # compute the univariate series f(_x, .., 'x', sum(nv))
+    if zm in p:
+        x1 = _x + p[zm]
+        p1 = p - p[zm]
+    else:
+        x1 = _x
+        p1 = p
+    if isinstance(f, str):
+        q = getattr(x1, f)(*args1)
+    else:
+        q = f(x1, *args1)
+    a = sorted(q.items())
+    c = [0]*h
+    for x in a:
+        c[x[0][0]] = x[1]
+    p1 = rs_series_from_list(p1, c, args[-2], args[-1])
+    return p1
+
+def mul_xin(p, i, n):
+    """
+    Computes p*x_i**n
+
+    x_i is the ith variable in p
+    """
+    R = p.ring
+    q = R(0)
+    for k, v in p.items():
+        k1 = list(k)
+        k1[i] += n
+        q[tuple(k1)] = v
+    return q
+
+def pow_xin(p, i, n):
+    """
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import pow_xin
+    >>> R, x, y = ring('x, y', QQ)
+    >>> p = x**QQ(2,5) + x + x**QQ(2,3)
+    >>> ii = p.ring.gens.index(x)
+    >>> pow_xin(p, ii, 15)
+    x**15 + x**10 + x**6
+    """
+    ring = p.ring
+    q = ring(0)
+    for k, v in p.items():
+        k1 = list(k)
+        k1[i] *= n
+        q[tuple(k1)] = v
+    return q
+
+def _nth_root1(p, n, iv, prec):
+    """
+    Univariate series expansion of the nth root of p
+
+    While passing p, make sure that it is of the form `1 + f(iv)`.
+
+      n (integer): compute p**(1/n)
+      iv: name of the series variable
+      prec: precision of the series
+
+    The Newton method is used.
+    """
+
+    reg = rs_is_regular(p, iv)
+    if not reg:
+        return rs_puiseux2(_nth_root1, p, n, iv, prec)
+    ring = p.ring
+    zm = ring.zero_monom
+    if zm not in p:
+        raise NotImplementedError('no constant term in series')
+    n = as_int(n)
+    assert p[zm] == 1
+    p1 = ring(1)
+    if p == 1:
+        return p
+    if n == 0:
+        return ring(1)
+    if n == 1:
+        return p
+    if n < 0:
+        n = -n
+        sign = 1
+    else:
+        sign = 0
+    for precx in _giant_steps(prec):
+        tmp = rs_pow(p1, n + 1, iv, precx)
+        tmp = rs_mul(tmp, p, iv, precx)
+        p1 += p1/n - tmp/n
+    if sign:
+        return p1
+    else:
+        return _series_inversion1(p1, iv, prec)
+
+def rs_nth_root(p, n, x, prec):
+    """
+    Multivariate series expansion of the nth root of p
+
+      n(integer): compute p**(1/n)
+      iv: variable name
+      prec: precision of the series
+
+    Notes
+    =====
+
+    The result of this function is dependent on the ring over which the
+    polynomial has been defined. If the answer involves a root of a constant,
+    make sure that the polynomial is over a real field. It can not yet handle
+    roots of symbols.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ, RR
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_nth_root
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_nth_root(1 + x + x*y, -3, x, 3)
+    2/9*x**2*y**2 + 4/9*x**2*y + 2/9*x**2 - 1/3*x*y - 1/3*x + 1
+    >>> R, x, y = ring('x, y', RR)
+    >>> rs_nth_root(3 + x + x*y, 3, x, 2)
+    0.160249952256379*x*y + 0.160249952256379*x + 1.44224957030741
+    """
+    if n == 0:
+        if p == 0:
+            raise ValueError('0**0 expression')
+        else:
+            return p.ring(1)
+    if n == 1:
+        return rs_trunc(p, x, prec)
+    R = p.ring
+    zm = R.zero_monom
+    index = R.gens.index(x)
+    m = min(p, key=lambda k: k[index])[index]
+    p = mul_xin(p, index, -m)
+    prec -= m
+
+    if _has_constant_term(p - 1, x):
+        zm = R.zero_monom
+        c = p[zm]
+        if R.domain is EX:
+            c_expr = c.as_expr()
+            const = c_expr**QQ(1, n)
+        elif isinstance(c, PolyElement):
+            try:
+                c_expr = c.as_expr()
+                const = R(c_expr**(QQ(1, n)))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                    "domain.")
+        else:
+            try:                             # RealElement doesn't support
+                const = R(c**Rational(1, n)) # exponentiation with mpq object
+            except ValueError:               # as exponent
+                raise DomainError("The given series can't be expanded in this "
+                "domain")
+        res = rs_nth_root(p/c, n, x, prec)*const
+        return res
+
+    res = _nth_root1(p, n, x, prec)
+    if m:
+        if m != int(m):
+            m = QQ(m, n)
+        res = mul_xin(res, index, m)
+    return res
+
+def rs_log(p, x, prec):
+    """
+    The Logarithm of ``p`` modulo ``O(x**prec)``
+
+    Notes
+    =====
+
+    truncation of ``integral dx p**-1*d p/dx`` is used.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_log
+    >>> R, x = ring('x', QQ)
+    >>> rs_log(1 + x, x, 8)
+    1/7*x**7 - 1/6*x**6 + 1/5*x**5 - 1/4*x**4 + 1/3*x**3 - 1/2*x**2 + x
+    >>> rs_log(x**QQ(3, 2) + 1, x, 5)
+    1/3*x**(9/2) - 1/2*x**3 + x**(3/2)
+    """
+    reg = rs_is_regular(p, x)
+    if not reg:
+        return rs_puiseux(rs_log, p, x, prec)
+    if p == 1:
+        return 0
+    R = p.ring
+    if _has_constant_term(p, x):
+        const = 0
+        zm = R.zero_monom
+        c = p[zm]
+        if c == 1:
+            pass
+        else:
+            c_expr = c.as_expr()
+            if R.domain is EX:
+                const = log(c_expr)
+            elif isinstance(c, PolyElement):
+                try:
+                    const = R(log(c_expr))
+                except ValueError:
+                    raise DomainError("The given series can't be expanded in this "
+                        "domain.")
+            else:
+                try:
+                    const = R(log(c))
+                except ValueError:
+                    raise DomainError("The given series can't be expanded in this "
+                    "domain")
+
+        dlog = p.diff(x)
+        dlog = rs_mul(dlog, _series_inversion1(p, x, prec), x, prec - 1)
+        return rs_integrate(dlog, x) + const
+    else:
+        raise NotImplementedError
+
+def rs_LambertW(p, iv, prec):
+    """
+    Calculates the series expansion of the principal branch of the Lambert W
+    function.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_LambertW
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_LambertW(x + x*y, x, 3)
+    -x**2*y**2 - 2*x**2*y - x**2 + x*y + x
+
+    See Also
+    ========
+
+    LambertW
+    """
+    reg = rs_is_regular(p, iv)
+    if not reg:
+        return rs_puiseux(rs_LambertW, p, iv, prec)
+    R = p.ring
+    p1 = R(0)
+    if _has_constant_term(p, iv):
+        raise NotImplementedError('Polynomial must not have constant term in \
+              the series variables')
+    if iv in R.gens:
+        for precx in _giant_steps(prec):
+            e = rs_exp(p1, iv, precx)
+            p2 = rs_mul(e, p1, iv, precx) - p
+            p3 = rs_mul(e, p1 + 1, iv, precx)
+            p3 = rs_series_inversion(p3, iv, precx)
+            tmp = rs_mul(p2, p3, iv, precx)
+            p1 -= tmp
+        return p1
+    else:
+        raise NotImplementedError
+
+def _exp1(p, x, prec):
+    """
+    Helper function for ``rs_exp``
+    """
+    R = p.ring
+    p1 = R(1)
+    for precx in _giant_steps(prec):
+        pt = p - rs_log(p1, x, precx)
+        tmp = rs_mul(pt, p1, x, precx)
+        p1 += tmp
+    return p1
+
+def rs_exp(p, x, prec):
+    """
+    Exponentiation of a series modulo ``O(x**prec)``
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_exp
+    >>> R, x = ring('x', QQ)
+    >>> rs_exp(x**2, x, 7)
+    1/6*x**6 + 1/2*x**4 + x**2 + 1
+    """
+    reg = rs_is_regular(p, x)
+    if not reg:
+        return rs_puiseux(rs_exp, p, x, prec)
+    R = p.ring
+    index = R.gens.index(x)
+    if _has_constant_term(p, x):
+        zm = R.zero_monom
+        c = p[zm]
+        if R.domain is EX:
+            c_expr = c.as_expr()
+            const = exp(c_expr)
+        elif isinstance(c, PolyElement):
+            try:
+                c_expr = c.as_expr()
+                const = R(exp(c_expr))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                    "domain.")
+        else:
+            try:
+                const = R(exp(c))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                "domain")
+        p1 = p - c
+
+    # Makes use of sympy fuctions to evaluate the values of the cos/sin
+    # of the constant term.
+        return const*rs_exp(p1, x, prec)
+
+    if len(p) > 20:
+        return _exp1(p, x, prec)
+    one = R(1)
+    n = 1
+    k = 1
+    c = []
+    for k in range(prec):
+        c.append(one/n)
+        k += 1
+        n *= k
+
+    r = rs_series_from_list(p, c, x, prec)
+    return r
+
+# TODO
+# Needs to be benchmarked before use in rs_atan
+def _atan_series(p, iv, prec):
+    R = p.ring
+    mo = R(-1)
+    c = [-mo]
+    p2 = rs_square(p, iv, prec)
+    for k in range(1, prec):
+        c.append(mo**k/(2*k + 1))
+    s = rs_series_from_list(p2, c, iv, prec)
+    s = rs_mul(s, p, iv, prec)
+    return s
+
+def rs_atan(p, x, prec):
+    """
+    The arctangent of a series
+
+    Returns the series expansion of the atan of p, about 0.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_atan
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_atan(x + x*y, x, 4)
+    -1/3*x**3*y**3 - x**3*y**2 - x**3*y - 1/3*x**3 + x*y + x
+
+    See Also
+    ========
+
+    atan
+    """
+    reg = rs_is_regular(p, x)
+    if not reg:
+        return rs_puiseux(rs_atan, p, x, prec)
+    R = p.ring
+    const = 0
+    if _has_constant_term(p, x):
+        zm = R.zero_monom
+        c = p[zm]
+        if R.domain is EX:
+            c_expr = c.as_expr()
+            const = atan(c_expr)
+        elif isinstance(c, PolyElement):
+            try:
+                c_expr = c.as_expr()
+                const = R(atan(c_expr))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                    "domain.")
+        else:
+            try:
+                const = R(atan(c))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                "domain")
+
+    # Instead of using a closed form formula, we differentiate atan(p) to get
+    # `1/(1+p**2) * dp`, whose series expansion is much easier to calculate.
+    # Finally we integrate to get back atan
+    dp = p.diff(x)
+    p1 = rs_square(p, x, prec) + R(1)
+    p1 = rs_series_inversion(p1, x, prec - 1)
+    p1 = rs_mul(dp, p1, x, prec - 1)
+    return rs_integrate(p1, x) + const
+
+def rs_asin(p, iv, prec):
+    """
+    Arcsine of a series
+
+    Returns the series expansion of the asin of p, about 0.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_asin
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_asin(x, x, 8)
+    5/112*x**7 + 3/40*x**5 + 1/6*x**3 + x
+
+    See Also
+    ========
+
+    asin
+    """
+    reg = rs_is_regular(p, iv)
+    if not reg:
+        return rs_puiseux(rs_asin, p, iv, prec)
+    if _has_constant_term(p, iv):
+        raise NotImplementedError('Polynomial must not have constant term in \
+              series variables')
+    ring = p.ring
+    if iv in ring.gens:
+        # get a good value
+        if len(p) > 20:
+            dp = rs_diff(p, iv)
+            p1 = 1 - rs_square(p, iv, prec - 1)
+            p1 = rs_nth_root(p1, -2, iv, prec - 1)
+            p1 = rs_mul(dp, p1, iv, prec - 1)
+            return rs_integrate(p1, iv)
+        one = ring(1)
+        c = [0, one, 0]
+        for k in range(3, prec, 2):
+            c.append((k - 2)**2*c[-2]/(k*(k - 1)))
+            c.append(0)
+        return rs_series_from_list(p, c, iv, prec)
+
+    else:
+        raise NotImplementedError
+
+def _tan1(p, x, prec):
+    """
+    Helper function of ``rs_tan``
+
+    Returns the series expansion of tan of a univariate series using Newton's
+    method. It takes advantage of the fact that series expansion of atan is
+    easier than that of tan.
+
+    Consider `f(x) = y - atan(x)`
+    Let r be a root of f(x) found using Newton's method.
+    Then `f(r) = 0`
+    Or `y  = atan(x)` where `x = tan(y)` as required.
+    """
+    R = p.ring
+    p1 = R(0)
+    for precx in _giant_steps(prec):
+        tmp = p - rs_atan(p1, x, precx)
+        tmp = rs_mul(tmp, 1 + rs_square(p1, x, precx), x, precx)
+        p1 += tmp
+    return p1
+
+def rs_tan(p, x, prec):
+    """
+    Tangent of a series
+
+    Returns the series expansion of the tan of p, about 0.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_tan
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_tan(x + x*y, x, 4)
+    1/3*x**3*y**3 + x**3*y**2 + x**3*y + 1/3*x**3 + x*y + x
+
+   See Also
+   ========
+
+   tan
+   """
+    reg = rs_is_regular(p, x)
+    if not reg:
+        r = rs_puiseux(rs_tan, p, x, prec)
+        return r
+    R = p.ring
+    const = 0
+    if _has_constant_term(p, x):
+        zm = R.zero_monom
+        c = p[zm]
+        if R.domain is EX:
+            c_expr = c.as_expr()
+            const = tan(c_expr)
+        elif isinstance(c, PolyElement):
+            try:
+                c_expr = c.as_expr()
+                const = R(tan(c_expr))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                    "domain.")
+        else:
+            try:
+                const = R(tan(c))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                "domain")
+        p1 = p - c
+
+    # Makes use of sympy fuctions to evaluate the values of the cos/sin
+    # of the constant term.
+        t2 = rs_tan(p1, x, prec)
+        t = rs_series_inversion(1 - const*t2, x, prec)
+        return rs_mul(const + t2, t, x, prec)
+
+    if R.ngens == 1:
+        return _tan1(p, x, prec)
+    else:
+        return rs_fun(p, rs_tan, x, prec)
+
+def rs_cot(p, iv, prec):
+    """
+    Cotangent of a series
+
+    Returns the series expansion of the cot of p, about 0.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_cot
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_cot(x, x, 6)
+    -2/945*x**5 - 1/45*x**3 - 1/3*x + x**-1
+
+    See Also
+    ========
+
+    cot
+    """
+    # It can not handle series like `p = x + x*y` where the coefficient of the
+    # linear term in the series variable is symbolic.
+    # TODO Does not work with puiseux series. What should be the value of m?
+    reg = rs_is_regular(p, iv)
+    if not reg:
+        r = rs_puiseux(rs_cot, p, iv, prec)
+        return r
+    i, m = _check_series_var(p, iv, 'cot')
+    prec1 = prec + 2*m
+    c, s = rs_cos_sin(p, iv, prec1)
+    s = mul_xin(s, i, -m)
+    s = rs_series_inversion(s, iv, prec1)
+    res = rs_mul(c, s, iv, prec1)
+    res = mul_xin(res, i, -m)
+    res = rs_trunc(res, iv, prec)
+    return res
+
+def rs_sin(p, x, prec):
+    """
+    Sine of a series
+
+    Returns the series expansion of the sin of p, about 0.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_sin
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_sin(x + x*y, x, 4)
+    -1/6*x**3*y**3 - 1/2*x**3*y**2 - 1/2*x**3*y - 1/6*x**3 + x*y + x
+    >>> rs_sin(x**QQ(3, 2) + x*y**QQ(7, 5), x, 4)
+    -1/2*x**(7/2)*y**(14/5) - 1/6*x**3*y**(21/5) + x**(3/2) + x*y**(7/5)
+
+    See Also
+    ========
+
+    sin
+    """
+    reg = rs_is_regular(p, x)
+    if not reg:
+        return rs_puiseux(rs_sin, p, x, prec)
+    R = x.ring
+    if not p:
+        return R(0)
+    # Support for constant term can be extended on the lines of rs_cos
+    # XXX Do we always need to truncate?
+    if _has_constant_term(p, x):
+        zm = R.zero_monom
+        c = p[zm]
+        if R.domain is EX:
+            c_expr = c.as_expr()
+            t1, t2 = sin(c_expr), cos(c_expr)
+        elif isinstance(c, PolyElement):
+            try:
+                c_expr = c.as_expr()
+                t1, t2 = R(sin(c_expr)), R(cos(c_expr))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                    "domain.")
+        else:
+            try:
+                t1, t2 = R(sin(c)), R(cos(c))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                "domain")
+        p1 = p - c
+
+    # Makes use of sympy cos, sin fuctions to evaluate the values of the cos/sin
+    # of the constant term.
+        return rs_sin(p1, x, prec)*t2 + rs_cos(p1, x, prec)*t1
+
+    # Series is calculated in terms of tan as its evaluation is fast.
+    if len(p) > 20 and p.ngens == 1:
+        t = rs_tan(p/2, x, prec)
+        t2 = rs_square(t, x, prec)
+        p1 = rs_series_inversion(1 + t2, x, prec)
+        return rs_mul(p1, 2*t, x, prec)
+    one = R(1)
+    n = 1
+    c = [0]
+    for k in range(2, prec + 2, 2):
+        c.append(one/n)
+        c.append(0)
+        n *= -k*(k + 1)
+    return rs_series_from_list(p, c, x, prec)
+
+def rs_cos(p, iv, prec):
+    """
+    Cosine of a series
+
+    Returns the series expansion of the cos of p, about 0.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_cos
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_cos(x + x*y, x, 4)
+    -1/2*x**2*y**2 - x**2*y - 1/2*x**2 + 1
+    >>> rs_cos(x + x*y, x, 4)/x**QQ(7, 5)
+    -1/2*x**(3/5)*y**2 - x**(3/5)*y - 1/2*x**(3/5) + x**(-7/5)
+
+    See Also
+    ========
+
+    cos
+    """
+    reg = rs_is_regular(p, iv)
+    if not reg:
+        return rs_puiseux(rs_cos, p, iv, prec)
+    R = p.ring
+    if _has_constant_term(p, iv):
+        zm = R.zero_monom
+        c = p[zm]
+        if R.domain is EX:
+            c_expr = c.as_expr()
+            t1, t2 = sin(c_expr), cos(c_expr)
+        elif isinstance(c, PolyElement):
+            try:
+                c_expr = c.as_expr()
+                t1, t2 = R(sin(c_expr)), R(cos(c_expr))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                    "domain.")
+        else:
+            try:
+                t1, t2 = R(sin(c)), R(cos(c))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                "domain")
+        p1 = p - c
+
+    # Makes use of sympy cos, sin fuctions to evaluate the values of the cos/sin
+    # of the constant term.
+        return rs_cos(p1, iv, prec)*t2 - rs_sin(p1, iv, prec)*t1
+
+    # Series is calculated in terms of tan as its evaluation is fast.
+    if len(p) > 20 and R.ngens == 1:
+        t = rs_tan(p/2, iv, prec)
+        t2 = rs_square(t, iv, prec)
+        p1 = rs_series_inversion(1+t2, iv, prec)
+        return rs_mul(p1 ,1 - t2, iv, prec)
+    one = R(1)
+    n = 1
+    c = []
+    for k in range(2, prec + 2, 2):
+        c.append(one/n)
+        c.append(0)
+        n *= -k*(k - 1)
+    return rs_series_from_list(p, c, iv, prec)
+
+def rs_cos_sin(p, iv, prec):
+    """
+    Returns the tuple (rs_cos(p, iv, iv), rs_sin(p, iv, iv))
+    Is faster than calling rs_cos and rs_sin separately
+    """
+    reg = rs_is_regular(p, iv)
+    if not reg:
+        return rs_puiseux3(rs_cos_sin, p, iv, prec)
+    t = rs_tan(p/2, iv, prec)
+    t2 = rs_square(t, iv, prec)
+    p1 = rs_series_inversion(1 + t2, iv, prec)
+    return (rs_mul(p1, 1 - t2, iv, prec), rs_mul(p1, 2*t, iv, prec))
+
+# TODO
+# Needs to be benchmarked before use in rs_atanh
+def _atanh(p, iv, prec):
+    R = p.ring
+    one = R(1)
+    c = [one]
+    p2 = rs_square(p, iv, prec)
+    for k in range(1, prec):
+        c.append(one/(2*k + 1))
+    s = rs_series_from_list(p2, c, iv, prec)
+    s = rs_mul(s, p, iv, prec)
+    return s
+
+def rs_atanh(p, x, prec):
+    """
+    Hyperbolic arctangent of a series
+
+    Returns the series expansion of the atanh of p, about 0.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_atanh
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_atanh(x + x*y, x, 4)
+    1/3*x**3*y**3 + x**3*y**2 + x**3*y + 1/3*x**3 + x*y + x
+
+    See Also
+    ========
+
+    atanh
+    """
+    reg = rs_is_regular(p, x)
+    if not reg:
+        return rs_puiseux(rs_atanh, p, x, prec)
+    R = p.ring
+    const = 0
+    if _has_constant_term(p, x):
+        zm = R.zero_monom
+        c = p[zm]
+        if R.domain is EX:
+            c_expr = c.as_expr()
+            const = atanh(c_expr)
+        elif isinstance(c, PolyElement):
+            try:
+                c_expr = c.as_expr()
+                const = R(atanh(c_expr))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                    "domain.")
+        else:
+            try:
+                const = R(atanh(c))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                "domain")
+
+    # Instead of using a closed form formula, we differentiate atanh(p) to get
+    # `1/(1-p**2) * dp`, whose series expansion is much easier to calculate.
+    # Finally we integrate to get back atanh
+    dp = rs_diff(p, x)
+    p1 = - rs_square(p, x, prec) + 1
+    p1 = rs_series_inversion(p1, x, prec - 1)
+    p1 = rs_mul(dp, p1, x, prec - 1)
+    return rs_integrate(p1, x) + const
+
+def rs_sinh(p, iv, prec):
+    """
+    Hyperbolic sine of a series
+
+    Returns the series expansion of the sinh of p, about 0.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_sinh
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_sinh(x + x*y, x, 4)
+    1/6*x**3*y**3 + 1/2*x**3*y**2 + 1/2*x**3*y + 1/6*x**3 + x*y + x
+
+    See Also
+    ========
+
+    sinh
+    """
+    # Check for negative exponent
+    reg = rs_is_regular(p, iv)
+    if not reg:
+        return rs_puiseux(rs_sinh, p, iv, prec)
+    t = rs_exp(p, iv, prec)
+    t1 = rs_series_inversion(t, iv, prec)
+    return (t - t1)/2
+
+def rs_cosh(p, iv, prec):
+    """
+    Hyperbolic cosine of a series
+
+    Returns the series expansion of the cosh of p, about 0.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_cosh
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_cosh(x + x*y, x, 4)
+    1/2*x**2*y**2 + x**2*y + 1/2*x**2 + 1
+
+    See Also
+    ========
+
+    cosh
+    """
+    # Check for negative exponent
+    reg = rs_is_regular(p, iv)
+    if not reg:
+        return rs_puiseux(rs_cosh, p, iv, prec)
+    t = rs_exp(p, iv, prec)
+    t1 = rs_series_inversion(t, iv, prec)
+    return (t + t1)/2
+
+def _tanh(p, iv, prec):
+    """
+    Helper function of ``rs_tanh``
+
+    Returns the series expansion of tanh of a univariate series using Newton's
+    method. It takes advantage of the fact that series expansion of atanh is
+    easier than that of tanh.
+
+    See Also
+    ========
+
+    _tanh
+    """
+    R = p.ring
+    p1 = R(0)
+    for precx in _giant_steps(prec):
+        tmp = p - rs_atanh(p1, iv, precx)
+        tmp = rs_mul(tmp, 1 - rs_square(p1, iv, prec), iv, precx)
+        p1 += tmp
+    return p1
+
+def rs_tanh(p, x, prec):
+    """
+    Hyperbolic tangent of a series
+
+    Returns the series expansion of the tanh of p, about 0.
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_tanh
+    >>> R, x, y = ring('x, y', QQ)
+    >>> rs_tanh(x + x*y, x, 4)
+    -1/3*x**3*y**3 - x**3*y**2 - x**3*y - 1/3*x**3 + x*y + x
+
+    See Also
+    ========
+
+    tanh
+    """
+    reg = rs_is_regular(p, x)
+    if not reg:
+        return rs_puiseux(rs_tanh, p, x, prec)
+    R = p.ring
+    const = 0
+    if _has_constant_term(p, x):
+        zm = R.zero_monom
+        c = p[zm]
+        if R.domain is EX:
+            c_expr = c.as_expr()
+            const = tanh(c_expr)
+        elif isinstance(c, PolyElement):
+            try:
+                c_expr = c.as_expr()
+                const = R(tanh(c_expr))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                    "domain.")
+        else:
+            try:
+                const = R(tanh(c))
+            except ValueError:
+                raise DomainError("The given series can't be expanded in this "
+                "domain")
+        p1 = p - c
+        t1 = rs_tanh(p1, x, prec)
+        t = rs_series_inversion(1 + const*t1, x, prec)
+        return rs_mul(const + t1, t, x, prec)
+
+    if R.ngens == 1:
+        return _tanh(p, x, prec)
+    else:
+        return rs_fun(p, _tanh, x, prec)
+
+def rs_newton(p, x, prec):
+    """
+    Compute the truncated Newton sum of the polynomial ``p``
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_newton
+    >>> R, x = ring('x', QQ)
+    >>> p = x**2 - 2
+    >>> rs_newton(p, x, 5)
+    8*x**4 + 4*x**2 + 2
+    """
+    deg = p.degree()
+    p1 = _invert_monoms(p)
+    p2 = rs_series_inversion(p1, x, prec)
+    p3 = rs_mul(p1.diff(x), p2, x, prec)
+    res = deg - p3*x
+    return res
+
+def rs_hadamard_exp(p1, inverse=False):
+    """
+    Return ``sum f_i/i!*x**i`` from ``sum f_i*x**i``,
+    where ``x`` is the first variable.
+
+    If ``invers=True`` return ``sum f_i*i!*x**i``
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_hadamard_exp
+    >>> R, x = ring('x', QQ)
+    >>> p = 1 + x + x**2 + x**3
+    >>> rs_hadamard_exp(p)
+    1/6*x**3 + 1/2*x**2 + x + 1
+    """
+    R = p1.ring
+    if R.domain != QQ:
+        raise NotImplementedError
+    p = R.zero
+    if not inverse:
+        for exp1, v1 in p1.items():
+            p[exp1] = v1/int(ifac(exp1[0]))
+    else:
+        for exp1, v1 in p1.items():
+            p[exp1] = v1*int(ifac(exp1[0]))
+    return p
+
+def rs_compose_add(p1, p2):
+    """
+    compute the composed sum ``prod(p2(x - beta) for beta root of p1)``
+
+    Examples
+    ========
+
+    >>> from sympy.polys.domains import QQ
+    >>> from sympy.polys.rings import ring
+    >>> from sympy.polys.ring_series import rs_compose_add
+    >>> R, x = ring('x', QQ)
+    >>> f = x**2 - 2
+    >>> g = x**2 - 3
+    >>> rs_compose_add(f, g)
+    x**4 - 10*x**2 + 1
+
+    References
+    ==========
+
+    A. Bostan, P. Flajolet, B. Salvy and E. Schost
+    "Fast Computation with Two Algebraic Numbers",
+    (2002) Research Report 4579, Institut
+    National de Recherche en Informatique et en Automatique
+    """
+    R = p1.ring
+    x = R.gens[0]
+    prec = p1.degree() * p2.degree() + 1
+    np1 = rs_newton(p1, x, prec)
+    np1e = rs_hadamard_exp(np1)
+    np2 = rs_newton(p2, x, prec)
+    np2e = rs_hadamard_exp(np2)
+    np3e = rs_mul(np1e, np2e, x, prec)
+    np3 = rs_hadamard_exp(np3e, True)
+    np3a = (np3[(0,)] - np3)/x
+    q = rs_integrate(np3a, x)
+    q = rs_exp(q, x, prec)
+    q = _invert_monoms(q)
+    q = q.primitive()[1]
+    dp = p1.degree() * p2.degree() - q.degree()
+    # `dp` is the multiplicity of the zeroes of the resultant;
+    # these zeroes are missed in this computation so they are put here.
+    # if p1 and p2 are monic irreducible polynomials,
+    # there are zeroes in the resultant
+    # if and only if p1 = p2 ; in fact in that case p1 and p2 have a
+    # root in common, so gcd(p1, p2) != 1; being p1 and p2 irreducible
+    # this means p1 = p2
+    if dp:
+        q = q*x**dp
+    return q
