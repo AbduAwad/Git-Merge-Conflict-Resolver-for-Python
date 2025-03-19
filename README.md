@@ -43,7 +43,7 @@ pip install torch transformers pandas numpy tqdm scikit-learn
 ```
 
 
-#### Transformer.py: 
+#### Transformer.py: (works in my google colab environment) just obtain the model from the environment and put it in the models folder in the project when we make it.
 
 - Script to train and output trained bert model on the dataset of merge conflicts on 10 examples in the dataset conflicts-py folder. Works in google colab and takes 10 minutes on GPU. The model is saved in the models folder in google colab. Must enter in API Key from wandb.ai during runtime to make it work.
 
