@@ -20,3 +20,24 @@ _______
 ### Dataset:
 
 Victor Cacciari Miraldo. (2020). Dataset of merge conflicts collected from GitHub repositories [Data set]. Zenodo. https://doi.org/10.5281/zenodo.3751038
+
+Github Mining for Merge Conflict Resolution
+
+# Virtual Machine:
+
+1. Create a new virtual environment using the following command:
+
+```bash
+python -m venv myenv
+```
+
+2. Activate the virtual environment using the following command: (Windows)
+```bash
+$ source myenv/Scripts/activate
+```
+
+3. Install the required packages using the following command:
+
+```bash
+pip install torch transformers pandas numpy tqdm scikit-learn
+```
