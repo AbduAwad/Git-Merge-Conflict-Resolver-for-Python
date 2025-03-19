@@ -83,7 +83,7 @@ class MergeConflictDataset(Dataset):
             "labels": labels
         }
 
-def prepare_dataset(dataset_dir="dataset/conflicts-py", max_samples=20):
+def prepare_dataset(dataset_dir="dataset/conflicts-py", max_samples=10):
     """
     Loads up to `max_samples` merge conflict instances from the dataset directory.
     Each conflict instance is expected to be a folder containing O.py, A.py, B.py, and M.py.
@@ -381,6 +381,7 @@ def main():
     
     # Evaluate model
     results = evaluate_model(model, tokenizer, test_examples)
+    print(results)
     
     # Demo: Apply model to a sample conflict
     if len(test_examples) > 0:

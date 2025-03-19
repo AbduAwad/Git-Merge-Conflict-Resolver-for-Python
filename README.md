@@ -41,3 +41,9 @@ $ source myenv/Scripts/activate
 ```bash
 pip install torch transformers pandas numpy tqdm scikit-learn
 ```
+
+4. API Key for the wandb library (found at this link):
+
+```bash
+https://wandb.ai/abdulrahmansawad-carleton-university
+```
