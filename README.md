@@ -42,13 +42,21 @@ $ source myenv/Scripts/activate
 pip install torch transformers pandas numpy tqdm scikit-learn
 ```
 
+_____
 
-#### Transformer.py: (works in my google colab environment) just obtain the model from the environment and put it in the models folder in the project when we make it.
+### Training the Transformer Model: Transformer.py: 
 
-- Script to train and output trained bert model on the dataset of merge conflicts on 10 examples in the dataset conflicts-py folder. Works in google colab and takes 10 minutes on GPU. The model is saved in the models folder in google colab. Must enter in API Key from wandb.ai during runtime to make it work.
+- Run on google colab using the T4 GPU:
 
-4. API Key for the wandb library (found at this link):
+#### Instructions: (works in my google colab environment) just obtain the model from the environment and put it in the models folder in the project when we make it.
 
-```bash
-https://wandb.ai/abdulrahmansawad-carleton-university
-```
+- **Transformer.py:** Script to train and output trained bert model on the dataset of merge conflicts on 10 examples in the dataset conflicts-py folder. Works in google colab and takes 10 minutes on GPU. The model is saved in the models folder in google colab. Must enter in API Key from wandb.ai during runtime to make it work.
+
+- To run in google colab, Mount the google drive and run the script. and save the dataset in the google drive. So the model is saved in the models folder in google colab. Then download the model and put it in the models folder in the project.
+
+**Current Approximate Training Time on Entire Set on the T4 GPU: 10.75 hours**
+
+#### Test the Transfomer model 
+- run 'test_ransformer.py' in google colab in same notebook but in a different cell under the training cell. 
+
+- **test_transformer.py:** Script to test the trained model by accessing the outputed model in the model_output/final_model folder. You can call the model on a conflict and it will output the predicted resolution.
