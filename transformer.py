@@ -32,7 +32,7 @@ MODEL_CONFIG = {
     "gradient_accumulation_steps": 4,  # Simulate larger batch sizes
     "learning_rate": 5e-5,
     "num_epochs": 5,
-    "output_dir": "./model_output",
+    "output_dir": "./model_output_100",
     "fp16": False,  # Set to True only if your CPU supports it
 }
 
@@ -83,7 +83,7 @@ class MergeConflictDataset(Dataset):
             "labels": labels
         }
 
-def prepare_dataset(dataset_dir="dataset/conflicts-py", max_samples=10):
+def prepare_dataset(dataset_dir="/content/drive/MyDrive/dataset/conflicts-py", max_samples=100):
     """
     Loads up to `max_samples` merge conflict instances from the dataset directory.
     Each conflict instance is expected to be a folder containing O.py, A.py, B.py, and M.py.
@@ -222,7 +222,7 @@ def train_model():
     data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
         model=model,
-        padding=True,
+        padding="max_length",
         max_length=MODEL_CONFIG["max_input_length"]
     )
     
@@ -235,16 +235,17 @@ def train_model():
         gradient_accumulation_steps=MODEL_CONFIG["gradient_accumulation_steps"],
         learning_rate=MODEL_CONFIG["learning_rate"],
         weight_decay=0.01,
-        evaluation_strategy="epoch",
+        eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
         logging_dir="./logs",
         logging_steps=10,
-        fp16=MODEL_CONFIG["fp16"],
-        # Additional CPU optimizations
+        fp16=MODEL_CONFIG["fp16"], 
+        # Additional CPU optimizations 
         dataloader_num_workers=0,  # Prevents multiprocessing issues on some systems
         optim="adamw_torch",  # Use PyTorch's implementation which is more CPU-friendly
         gradient_checkpointing=True,  # Reduces memory usage at the cost of computation time
+        report_to=[]  # Disable Weights & Biases logging
     )
     
     # Initialize Trainer
@@ -346,8 +347,7 @@ def apply_model_to_conflict(model, tokenizer, original, branch_a, branch_b):
     
     input_ids = input_encodings["input_ids"].to(device)
     attention_mask = input_encodings["attention_mask"].to(device)
-    
-    # Generate merge resolution
+
     outputs = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
@@ -393,9 +393,9 @@ def main():
             example["branch_b"]
         )
         
-        logger.info("\nExample conflict resolution:")
-        logger.info(f"Predicted merge:\n{merged}")
-        logger.info(f"Actual merge:\n{example['merged']}")
+        print("Example conflict resolution:")
+        print(f"Predicted merge:\n{merged}")
+        print(f"Actual merge:\n{example['merged']}")
     
     logger.info("Pipeline complete!")
 
