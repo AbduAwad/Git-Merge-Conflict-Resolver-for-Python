@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import re
+from sklearn import logger
 from sklearn.model_selection import train_test_split
 
 def process_file_content(content):
@@ -11,7 +12,7 @@ def process_file_content(content):
     content = content.replace('\r\n', '\n')
     return content.strip()
 
-def prepare_dataset(dataset_dir="dataset/conflicts-py", max_samples=10):
+def prepare_dataset(dataset_dir="dataset/conflicts-py", max_samples=100):
     """
     Loads up to `max_samples` merge conflict instances from the dataset directory.
     Each conflict instance is expected to be a folder containing O.py, A.py, B.py, and M.py.
@@ -40,7 +41,7 @@ def prepare_dataset(dataset_dir="dataset/conflicts-py", max_samples=10):
     train_examples, test_examples = train_test_split(examples, test_size=0.2, random_state=42)
     train_examples, val_examples = train_test_split(train_examples, test_size=0.1, random_state=42)
     
-    print(f"✅ Dataset split: Train={len(train_examples)}, Val={len(val_examples)}, Test={len(test_examples)}")
+    print(f"Dataset split: Train={len(train_examples)}, Val={len(val_examples)}, Test={len(test_examples)}")
     
     return train_examples, val_examples, test_examples
 
