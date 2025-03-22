@@ -1,49 +1,33 @@
-# Run in Google Colab for: (We Will Use this File in the plugin, when the time comes).
+# test the model at model_output_codet5_1000
 
-from transformers import BartTokenizer, BartForConditionalGeneration
+from transformers import T5ForConditionalGeneration, RobertaTokenizerFast
 import torch
 
-# Specify the path to your saved model folder
-model_path = "./model_output_2/final_model"
+model_path = "/content/model_output_codet5_1000/final_model"
+model = T5ForConditionalGeneration.from_pretrained(model_path)
+tokenizer = RobertaTokenizerFast.from_pretrained(model_path)
 
-# Load the tokenizer and model from the folder
-tokenizer = BartTokenizer.from_pretrained(model_path)
-model = BartForConditionalGeneration.from_pretrained(model_path)
 model.to("cuda" if torch.cuda.is_available() else "cpu")
 
-# Prepare a new merge conflict example
-original_code = """
-def add(a, b):
-    return a + b
-"""
-
-branch_a_code = """
-def add(a, b):
-    return a + b + 1
-"""
-
-branch_b_code = """
-def add(a, b):
-    return a + b - 1
-"""
+original_code = "def add(a, b):\n    return a + b"
+branch_a_code = "def add(a, b):\n    return a + b"
+branch_b_code = "def add(a, b):\n    return a - b"
 
 input_text = (
     f"<O>\n{original_code}\n</O>\n"
     f"<A>\n{branch_a_code}\n</A>\n"
     f"<B>\n{branch_b_code}\n</B>"
 )
+      
 
-
-# Tokenize the input
 inputs = tokenizer(
-    input_text, 
-    return_tensors="pt", 
-    padding="max_length", 
-    truncation=True, 
-    max_length=768
+    input_text,
+    truncation=True,
+    max_length=512,
+    padding="max_length",
+    return_tensors="pt"
 )
 
-# Move tensors to the correct device
 inputs = {key: val.to("cuda" if torch.cuda.is_available() else "cpu") for key, val in inputs.items()}
 
 # Generate a merge resolution using beam search
@@ -58,3 +42,4 @@ outputs = model.generate(
 # Decode the generated merge resolution
 resolved_merge = tokenizer.decode(outputs[0], skip_special_tokens=True)
 print("Resolved Merge:\n", resolved_merge)
+
