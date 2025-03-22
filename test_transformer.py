@@ -41,5 +41,8 @@ outputs = model.generate(
 
 # Decode the generated merge resolution
 resolved_merge = tokenizer.decode(outputs[0], skip_special_tokens=True)
+# remove special tokens:
+resolved_merge = resolved_merge.replace("<O>", "").replace("</O>", "").replace("<A>", "").replace("</A>", "").replace("<B>", "").replace("</B>", "")
+
 print("Resolved Merge:\n", resolved_merge)
 
