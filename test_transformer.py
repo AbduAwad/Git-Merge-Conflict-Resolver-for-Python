@@ -1,48 +1,75 @@
-# test the model at model_output_codet5_1000
-
 from transformers import T5ForConditionalGeneration, RobertaTokenizerFast
 import torch
 
-model_path = "/content/model_output_codet5_1000/final_model"
+# Load model and tokenizer
+model_path = "/content/model_output_codet5_5000/final_model"
 model = T5ForConditionalGeneration.from_pretrained(model_path)
 tokenizer = RobertaTokenizerFast.from_pretrained(model_path)
 
-model.to("cuda" if torch.cuda.is_available() else "cpu")
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model.to(device)
 
-original_code = "def add(a, b):\n    return a + b"
-branch_a_code = "def add(a, b):\n    return a + b"
-branch_b_code = "def add(a, b):\n    return a - b"
+# Define 5 test merge conflict examples
+examples = [
+    {
+        "original": "def multiply(a, b):\n    return a * b",
+        "a": "def multiply_numbers(a, b):\n    return a * b",
+        "b": "def multiply(a, b):\n    result = a * b\n    return result"
+    },
+    {
+        "original": "def greet(name):\n    print(f\"Hello, {name}!\")",
+        "a": "def greet(name):\n    print(f\"Hi, {name}!\")",
+        "b": "def greet(first_name, last_name):\n    print(f\"Hello, {first_name} {last_name}!\")"
+    },
+    {
+        "original": "def divide(a, b):\n    return a / b",
+        "a": "def divide(a, b):\n    print(\"Dividing numbers\")\n    return a / b",
+        "b": "def divide(a, b):\n    return a / b if b != 0 else 0"
+    },
+    {
+        "original": "def max_val(x, y):\n    return x if x > y else y",
+        "a": "def max_val(x, y):\n    return max(x, y)",
+        "b": "def max_val(x, y):\n    return x if x >= y else y"
+    },
+    {
+        "original": "def is_even(n):\n    return n % 2 == 0",
+        "a": "def is_even(n):\n    # check if number is even\n    return n % 2 == 0",
+        "b": "def is_even(n):\n    return (n & 1) == 0"
+    }
+]
 
-input_text = (
-    f"<O>\n{original_code}\n</O>\n"
-    f"<A>\n{branch_a_code}\n</A>\n"
-    f"<B>\n{branch_b_code}\n</B>"
-)
-      
+# Run inference on each example
+for i, ex in enumerate(examples):
+    input_text = (
+        f"<O>\n{ex['original']}\n</O>\n"
+        f"<A>\n{ex['a']}\n</A>\n"
+        f"<B>\n{ex['b']}\n</B>"
+    )
+    
+    inputs = tokenizer(
+        input_text,
+        truncation=True,
+        max_length=512,
+        padding="max_length",
+        return_tensors="pt"
+    )
+    inputs = {k: v.to(device) for k, v in inputs.items()}
 
-inputs = tokenizer(
-    input_text,
-    truncation=True,
-    max_length=512,
-    padding="max_length",
-    return_tensors="pt"
-)
+    outputs = model.generate(
+        **inputs,
+        num_beams=4,
+        early_stopping=True,
+        no_repeat_ngram_size=2,
+        max_length=768
+    )
 
-inputs = {key: val.to("cuda" if torch.cuda.is_available() else "cpu") for key, val in inputs.items()}
+    resolved = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    resolved = resolved.replace("<O>", "").replace("</O>", "") \
+                       .replace("<A>", "").replace("</A>", "") \
+                       .replace("<B>", "").replace("</B>", "")
 
-# Generate a merge resolution using beam search
-outputs = model.generate(
-    **inputs, 
-    num_beams=4, 
-    early_stopping=True, 
-    no_repeat_ngram_size=2, 
-    max_length=768
-)
-
-# Decode the generated merge resolution
-resolved_merge = tokenizer.decode(outputs[0], skip_special_tokens=True)
-# remove special tokens:
-resolved_merge = resolved_merge.replace("<O>", "").replace("</O>", "").replace("<A>", "").replace("</A>", "").replace("<B>", "").replace("</B>", "")
-
-print("Resolved Merge:\n", resolved_merge)
-
+    print(f"\n==== Example {i + 1} ====")
+    print("Original Code:\n", ex["original"])
+    print("Branch A:\n", ex["a"])
+    print("Branch B:\n", ex["b"])
+    print("Resolved Merge:\n", resolved)

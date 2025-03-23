@@ -32,7 +32,7 @@ MODEL_CONFIG = {
     "gradient_accumulation_steps": 4,  # Simulate larger batch sizes
     "learning_rate": 3e-5,  # Slightly lower learning rate for CodeT5
     "num_epochs": 5,
-    "output_dir": "./model_output_codet5_1000",
+    "output_dir": "./model_output_codet5_5000",
     "fp16": False,  # Set to True only if your CPU supports it
 }
 
@@ -83,7 +83,7 @@ class MergeConflictDataset(Dataset):
             "labels": labels
         }
 
-def prepare_dataset(dataset_dir="/content/drive/MyDrive/dataset/conflicts-py", max_samples=2000):
+def prepare_dataset(dataset_dir="/content/drive/MyDrive/dataset/conflicts-py", max_samples=5000):
     """
     Loads up to `max_samples` merge conflict instances from the dataset directory.
     Each conflict instance is expected to be a folder containing O.py, A.py, B.py, and M.py.
@@ -291,6 +291,24 @@ def train_model():
         # Save model
         model.save_pretrained(os.path.join(MODEL_CONFIG["output_dir"], "final_model"))
         tokenizer.save_pretrained(os.path.join(MODEL_CONFIG["output_dir"], "final_model"))
+
+                # Optional: Save to Google Drive
+        try:
+            drive_output_path = "/content/drive/MyDrive/codet5_model_output_5000"
+            os.makedirs(drive_output_path, exist_ok=True)
+
+            import shutil
+            shutil.copytree(
+                os.path.join(MODEL_CONFIG["output_dir"], "final_model"),
+                os.path.join(drive_output_path, "final_model"),
+                dirs_exist_ok=True
+            )
+
+            logger.info(f"Model successfully saved to Google Drive at {drive_output_path}/final_model")
+
+        except Exception as e:
+            logger.error(f"Failed to save model to Google Drive: {e}")
+
         
         return model, tokenizer, test_examples
         
@@ -300,95 +318,7 @@ def train_model():
         logger.error(traceback.format_exc())
         return None, None, []
 
-def evaluate_model(model, tokenizer, test_examples):
-    """Evaluate the trained model on test data with metrics suited for code"""
-    if not model or not tokenizer or not test_examples:
-        logger.error("Cannot evaluate model: missing model, tokenizer, or test examples")
-        return None
-        
-    model.eval()
-    
-    # Create test dataset
-    test_dataset = MergeConflictDataset(
-        test_examples,
-        tokenizer,
-        MODEL_CONFIG["max_input_length"],
-        MODEL_CONFIG["max_output_length"]
-    )
-    
-    test_dataloader = DataLoader(
-        test_dataset, 
-        batch_size=MODEL_CONFIG["batch_size"],
-        shuffle=False
-    )
-    
-    results = []
-    
-    # Evaluate model on test data
-    with torch.no_grad():
-        for batch in tqdm(test_dataloader, desc="Evaluating"):
-            input_ids = batch["input_ids"].to(device)
-            attention_mask = batch["attention_mask"].to(device)
-            
-            # Generate predictions with beam search
-            outputs = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_length=MODEL_CONFIG["max_output_length"],
-                num_beams=4,
-                early_stopping=True,
-                no_repeat_ngram_size=2
-            )
-            
-            # Decode predictions
-            predictions = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            
-            # Store results
-            for i, pred in enumerate(predictions):
-                idx = i + len(results)
-                if idx >= len(test_examples):
-                    break  # Handle case where batch size doesn't divide evenly
-                example = test_examples[idx]
-                
-                # Calculate simple metrics
-                exact_match = pred.strip() == example["merged"].strip()
-                
-                # Calculate code-specific metrics
-                normalized_pred = re.sub(r'\s+', ' ', pred.strip())
-                normalized_actual = re.sub(r'\s+', ' ', example["merged"].strip())
-                whitespace_invariant_match = normalized_pred == normalized_actual
-                
-                # Calculate token-level accuracy (basic approximation)
-                pred_tokens = normalized_pred.split()
-                actual_tokens = normalized_actual.split()
-                token_match_ratio = calculate_token_match(pred_tokens, actual_tokens)
-                
-                results.append({
-                    "predicted_merge": pred,
-                    "actual_merge": example["merged"],
-                    "exact_match": exact_match,
-                    "whitespace_invariant_match": whitespace_invariant_match,
-                    "token_match_ratio": token_match_ratio
-                })
-    
-    if not results:
-        logger.error("No evaluation results generated")
-        return None
-    
-    # Calculate overall metrics
-    exact_match_rate = sum(r["exact_match"] for r in results) / len(results)
-    whitespace_invariant_rate = sum(r["whitespace_invariant_match"] for r in results) / len(results)
-    avg_token_match = sum(r["token_match_ratio"] for r in results) / len(results)
-    
-    logger.info(f"Exact match rate: {exact_match_rate:.2f}")
-    logger.info(f"Whitespace-invariant match rate: {whitespace_invariant_rate:.2f}")
-    logger.info(f"Average token match ratio: {avg_token_match:.2f}")
-    
-    # Save results
-    results_df = pd.DataFrame(results)
-    results_df.to_csv("codet5_model_predictions.csv", index=False)
-    
-    return results_df
+
 
 def calculate_token_match(pred_tokens, actual_tokens):
     """Calculate a simple token matching metric"""
@@ -463,11 +393,6 @@ def main():
         if not model or not tokenizer:
             logger.error("Failed to initialize or train model. Exiting.")
             return
-            
-        # Evaluate model
-        results = evaluate_model(model, tokenizer, test_examples)
-        if results is not None:
-            print(results[["exact_match", "whitespace_invariant_match", "token_match_ratio"]].mean())
         
         # Demo: Apply model to a sample conflict
         if len(test_examples) > 0:
@@ -493,3 +418,23 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# Perforemance: 
+
+"""
+
+trainer = Trainer(
+[965/965 3:40:48, Epoch 4/5]
+Epoch	Training Loss	Validation Loss
+1	0.584500	0.443484
+2	0.432800	0.410092
+3	0.428500	0.387623
+4	0.374900	0.381603
+There were missing keys in the checkpoint model loaded: ['encoder.embed_tokens.weight', 'decoder.embed_tokens.weight', 'lm_head.weight'].
+Evaluating: 100%|██████████| 215/215 [1:57:07<00:00, 32.68s/it]
+exact_match                   0.002331
+whitespace_invariant_match    0.002331
+token_match_ratio             0.061981
+
+"""
