@@ -6,7 +6,8 @@ from transformers import (
     T5ForConditionalGeneration,
     Trainer,
     TrainingArguments,
-    DataCollatorForSeq2Seq
+    DataCollatorForSeq2Seq,
+    default_data_collator
 )
 import pandas as pd
 import numpy as np
@@ -24,9 +25,9 @@ MODEL_CONFIG = {
     "max_output_length": 768,
     "batch_size": 4,
     "gradient_accumulation_steps": 4,
-    "learning_rate": 4e-5,
+    "learning_rate": 3e-5,
     "num_epochs": 5,
-    "output_dir": "./model_output_codet5_synthetic_1000",
+    "output_dir": "./model_output_codet5_synthetic_25000",
     "fp16": True,
 }
 
@@ -79,7 +80,17 @@ class MergeConflictDataset(Dataset):
             "labels": labels.long()
         }
 
-def prepare_dataset(json_path="/content/drive/MyDrive/synthetic_dataset/synthetic_merge_conflicts_50000_batched.json", max_samples=1000):
+def custom_data_collator(features):
+    # Use HuggingFace's default collator
+    batch = default_data_collator(features)
+
+    # Convert labels to tensor efficiently
+    if isinstance(batch["labels"], list):
+        batch["labels"] = torch.tensor(np.array(batch["labels"]), dtype=torch.int64)
+
+    return batch
+
+def prepare_dataset(json_path="/content/drive/MyDrive/synthetic_dataset/synthetic_merge_conflicts_50000_batched.json", max_samples=25000):
     import json
 
     if not os.path.exists(json_path):
@@ -151,13 +162,13 @@ def train_model():
         )
 
         trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=val_dataset,
-            tokenizer=tokenizer,
-            data_collator=data_collator,
+          model=model,
+          args=training_args,
+          train_dataset=train_dataset,
+          eval_dataset=val_dataset,
+          data_collator=custom_data_collator,  # ✅ Replace this
         )
+
 
         print("🚀 Starting training...")
         trainer.train()
@@ -165,18 +176,18 @@ def train_model():
         model.save_pretrained(os.path.join(MODEL_CONFIG["output_dir"], "final_model"))
         tokenizer.save_pretrained(os.path.join(MODEL_CONFIG["output_dir"], "final_model"))
 
-        # try:
-        #     drive_output_path = "/content/drive/MyDrive/model_output_codet5_synthetic_50"
-        #     os.makedirs(drive_output_path, exist_ok=True)
-        #     import shutil
-        #     shutil.copytree(
-        #         os.path.join(MODEL_CONFIG["output_dir"], "final_model"),
-        #         os.path.join(drive_output_path, "final_model"),
-        #         dirs_exist_ok=True
-        #     )
-        #     print(f"✅ Model saved to Google Drive at {drive_output_path}/final_model")
-        # except Exception as e:
-        #     print(f"⚠️ Failed to save model to Google Drive: {e}")
+        try:
+            drive_output_path = "/content/drive/MyDrive/model_output_codet5_synthetic_25000"
+            os.makedirs(drive_output_path, exist_ok=True)
+            import shutil
+            shutil.copytree(
+                os.path.join(MODEL_CONFIG["output_dir"], "final_model"),
+                os.path.join(drive_output_path, "final_model"),
+                dirs_exist_ok=True
+            )
+            print(f"✅ Model saved to Google Drive at {drive_output_path}/final_model")
+        except Exception as e:
+            print(f"⚠️ Failed to save model to Google Drive: {e}")
 
         return model, tokenizer, test_examples
 
