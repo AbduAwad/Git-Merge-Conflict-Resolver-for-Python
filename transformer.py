@@ -1,5 +1,6 @@
 """
-This script is used to fine-tune a T5 model on a large set of merge conflicts.
+This script is used to fine-tune a T5 model on a large set of merge conflicts and it is ran in google colab on the T4 GPU.
+The model is fine-tuned on a dataset of 30,000 merge conflicts.
 This script trains, evaluates, and saves the model to Google Drive.
 The script also evaluates the model on a test set and saves the results to a CSV file.
 """
