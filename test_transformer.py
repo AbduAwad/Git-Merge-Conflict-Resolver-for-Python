@@ -2,7 +2,7 @@ from transformers import T5ForConditionalGeneration, RobertaTokenizerFast
 import torch
 
 # Load model and tokenizer
-model_path = "/content/model_output_codet5_5000/final_model"
+model_path = "/content/model_output_codet5_synthetic_1000/final_model"
 model = T5ForConditionalGeneration.from_pretrained(model_path)
 tokenizer = RobertaTokenizerFast.from_pretrained(model_path)
 
@@ -45,7 +45,7 @@ for i, ex in enumerate(examples):
         f"<A>\n{ex['a']}\n</A>\n"
         f"<B>\n{ex['b']}\n</B>"
     )
-    
+
     inputs = tokenizer(
         input_text,
         truncation=True,
