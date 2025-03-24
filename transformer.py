@@ -1,3 +1,9 @@
+"""
+This script is used to fine-tune a T5 model on a large set of merge conflicts.
+This script trains, evaluates, and saves the model to Google Drive.
+The script also evaluates the model on a test set and saves the results to a CSV file.
+"""
+
 import os
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -14,6 +20,7 @@ import numpy as np
 from tqdm import tqdm
 import re
 from sklearn.model_selection import train_test_split
+import evaluate
 
 # Device setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -26,8 +33,8 @@ MODEL_CONFIG = {
     "batch_size": 4,
     "gradient_accumulation_steps": 4,
     "learning_rate": 3e-5,
-    "num_epochs": 5,
-    "output_dir": "./model_output_codet5_synthetic_25000",
+    "num_epochs": 3,
+    "output_dir": "./model_output_codet5_synthetic_30000",
     "fp16": True,
 }
 
@@ -90,7 +97,7 @@ def custom_data_collator(features):
 
     return batch
 
-def prepare_dataset(json_path="/content/drive/MyDrive/synthetic_dataset/synthetic_merge_conflicts_50000_batched.json", max_samples=25000):
+def prepare_dataset(json_path="/content/drive/MyDrive/synthetic_dataset/synthetic_merge_conflicts_50000_batched.json", max_samples=30000):
     import json
 
     if not os.path.exists(json_path):
@@ -177,7 +184,7 @@ def train_model():
         tokenizer.save_pretrained(os.path.join(MODEL_CONFIG["output_dir"], "final_model"))
 
         try:
-            drive_output_path = "/content/drive/MyDrive/model_output_codet5_synthetic_25000"
+            drive_output_path = "/content/drive/MyDrive/model_output_codet5_synthetic_30000"
             os.makedirs(drive_output_path, exist_ok=True)
             import shutil
             shutil.copytree(
@@ -197,31 +204,74 @@ def train_model():
         print(traceback.format_exc())
         return None, None, []
 
-def main():
+
+def evaluate_model(model, tokenizer, test_examples):
+    # Load metrics
+    rouge = evaluate.load("rouge")
+    bleu = evaluate.load("bleu")
+
+    # Prediction storage
+    predictions = []
+    references = []
+    exact_matches = []
+
+    # Go through test examples
+    for example in test_examples:
+        pred = apply_model_to_conflict(model, tokenizer, example["original"], example["branch_a"], example["branch_b"])
+        gold = example["merged"]
+
+        # Normalize for exact match
+        norm_pred = re.sub(r'\s+', ' ', pred.strip())
+        norm_gold = re.sub(r'\s+', ' ', gold.strip())
+
+        predictions.append(pred)
+        references.append(gold)
+        exact_matches.append(norm_pred == norm_gold)
+
+    # Compute scores
+    rouge_result = rouge.compute(predictions=predictions, references=references)
+    bleu_result = bleu.compute(predictions=predictions, references=[[ref] for ref in references])
+    exact_match_rate = np.mean(exact_matches)
+
+    # Save to CSV
+    df = pd.DataFrame({
+        "original": [ex["original"] for ex in test_examples],
+        "branch_a": [ex["branch_a"] for ex in test_examples],
+        "branch_b": [ex["branch_b"] for ex in test_examples],
+        "predicted_merge": predictions,
+        "actual_merge": references,
+        "exact_match": exact_matches
+    })
+
+    metrics_row = {
+        "original": "METRICS",
+        "branch_a": "",
+        "branch_b": "",
+        "predicted_merge": f"BLEU: {bleu_result['bleu']:.4f}",
+        "actual_merge": f"ROUGE-L: {rouge_result['rougeL']:.4f}",
+        "exact_match": f"{exact_match_rate:.4f}"
+    }
+
+    # Append row with metrics
+    df = pd.concat([df, pd.DataFrame([metrics_row])], ignore_index=True)
+
+    # Save
+    df.to_csv("codet5_test_eval_results.csv", index=False)
+    print("📁 Saved test results with metrics to codet5_test_eval_results.csv")
+
+    # save to google drive:
     try:
-        model_path = os.path.join(MODEL_CONFIG["output_dir"], "final_model")
-        print(f"🔍 Checking for existing model at {model_path}")
-        if os.path.exists(model_path):
-            print("📦 Loading existing model...")
-            tokenizer = RobertaTokenizerFast.from_pretrained(model_path)
-            model = T5ForConditionalGeneration.from_pretrained(model_path)
-            model.to(device)
-            _, _, test_examples = prepare_dataset()
-        else:
-            print("🆕 Training new model...")
-            model, tokenizer, test_examples = train_model()
-
-        if model and tokenizer and test_examples:
-            example = test_examples[0]
-            merged = apply_model_to_conflict(model, tokenizer, example["original"], example["branch_a"], example["branch_b"])
-            print("\n🧪 Sample Prediction:")
-            print("Predicted Merge:\n", merged)
-            print("Actual Merge:\n", example["merged"])
-
+        drive_output_path = "/content/drive/MyDrive/model_output_codet5_synthetic_30000"
+        os.makedirs(drive_output_path, exist_ok=True)
+        df.to_csv(os.path.join(drive_output_path, "codet5_test_eval_results.csv"), index=False)
+        print(f"✅ Test results saved to Google Drive at {drive_output_path}/codet5_test_eval_results.csv")
     except Exception as e:
-        import traceback
-        print(f"❌ Error in main function: {e}")
-        print(traceback.format_exc())
+        print(f"⚠️ Failed to save test results to Google Drive: {e}")
+
+    print(f"BLEU: {bleu_result['bleu']:.4f}")
+    print(f"ROUGE-L: {rouge_result['rougeL']:.4f}")
+    print(f"Exact Match Rate: {exact_match_rate:.4f}")
+
 
 def apply_model_to_conflict(model, tokenizer, original, branch_a, branch_b):
     input_text = (
@@ -255,6 +305,24 @@ def apply_model_to_conflict(model, tokenizer, original, branch_a, branch_b):
     merged = tokenizer.decode(outputs[0], skip_special_tokens=True)
     merged = re.sub(r"</?MERGED>", "", merged).strip()
     return merged
+
+
+def main():
+    model_path = os.path.join(MODEL_CONFIG["output_dir"], "final_model")
+    print(f"🔍 Checking for existing model at {model_path}")
+    if os.path.exists(model_path):
+        print("📦 Loading existing model...")
+        tokenizer = RobertaTokenizerFast.from_pretrained(model_path)
+        model = T5ForConditionalGeneration.from_pretrained(model_path)
+        model.to(device)
+        _, _, test_examples = prepare_dataset()
+    else:
+        print("🆕 Training new model...")
+        model, tokenizer, test_examples = train_model()
+
+    if model and tokenizer and test_examples:
+        evaluate_model(model, tokenizer, test_examples)
+
 
 if __name__ == "__main__":
     main()
