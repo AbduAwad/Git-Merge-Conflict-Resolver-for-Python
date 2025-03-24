@@ -9,11 +9,11 @@ _______
 
 ### Contributors:
 
-| Name | Student Number | Email |
-| --- | --- | --- |
-Abdulrahman Awad | 101256090 | abdulrahmanawad@cmail.carleton.ca
-Igor Tascu | 101181093 | igortascu@cmail.carleton.ca
-Antony Ren | 101151779 | antonyren@cmail.carleton.ca
+| Name              | Student Number| Email |
+| ---               | ---           | --- |
+Abdulrahman Awad    | 101256090     | abdulrahmanawad@cmail.carleton.ca
+Igor Tascu          | 101181093     | igortascu@cmail.carleton.ca
+Antony Ren          | 101151779     | antonyren@cmail.carleton.ca
 
 _______
 
