@@ -2,19 +2,21 @@
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 import * as path from 'path';
+import * as fs from 'fs';
 
 interface MergeConflict {
     originalCode: string | null;
     branchACode: string;
     branchBCode: string;
     context: string;
+    filePath: string;
 }
 
 let activePanel: vscode.WebviewPanel | null = null;
 
 export function activate(context: vscode.ExtensionContext) {
-    const conflictStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    conflictStatusBarItem.text = "$(git-merge) Find Conflicts";
+    const conflictStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
+    conflictStatusBarItem.text = "$(git-merge) Resolve Merge Conflicts";
     conflictStatusBarItem.tooltip = "Find Merge Conflicts in Current File";
     conflictStatusBarItem.command = 'mergeConflictReader.findConflicts';
     conflictStatusBarItem.show();
@@ -29,31 +31,14 @@ export function activate(context: vscode.ExtensionContext) {
 
         const document = editor.document;
         const text = document.getText();
-        const conflicts: MergeConflict[] = parseConflicts(text);
+        const conflicts: MergeConflict[] = parseConflicts(text, document.uri.fsPath);
 
         if (conflicts.length === 0) {
             vscode.window.showInformationMessage('No merge conflicts found');
             return;
         }
 
-        const outputChannel = vscode.window.createOutputChannel("Merge Conflicts");
-        outputChannel.clear();
-        outputChannel.show(true);
-
-        conflicts.forEach((conflict, index) => {
-            outputChannel.appendLine(`Conflict ${index + 1}:`);
-            outputChannel.appendLine('Branch A Code:');
-            outputChannel.appendLine(conflict.branchACode);
-            outputChannel.appendLine('\nBranch B Code:');
-            outputChannel.appendLine(conflict.branchBCode);
-            if (conflict.originalCode) {
-                outputChannel.appendLine('\nOriginal Code:');
-                outputChannel.appendLine(conflict.originalCode);
-            }
-            outputChannel.appendLine('-'.repeat(50));
-        });
-
-        vscode.window.showInformationMessage(`Found ${conflicts.length} merge conflict(s). Check the OUTPUT panel.`);
+        vscode.window.showInformationMessage(`Found ${conflicts.length} merge conflict(s)`);
 
         const modelOptions = [
             {
@@ -79,11 +64,10 @@ export function activate(context: vscode.ExtensionContext) {
 
         if (selected.value === "codet5") {
             for (const conflict of conflicts) {
-                showLoadingWebview();
+                showInitialWebview(conflict);
                 const resolution = await resolveWithPython(conflict);
                 if (resolution) {
-                    if (activePanel) activePanel.dispose();
-                    showWebviewPanel(resolution);
+                    if (activePanel) updateWebviewWithResolution(resolution, conflict);
                 } else {
                     vscode.window.showErrorMessage('⚠️ Could not generate resolution');
                 }
@@ -94,7 +78,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(findConflictsCommand);
 }
 
-function parseConflicts(text: string): MergeConflict[] {
+function parseConflicts(text: string, filePath: string): MergeConflict[] {
     const conflicts: MergeConflict[] = [];
     const lines = text.split('\n');
     let branchA: string[] = [], branchB: string[] = [], i = 0;
@@ -116,6 +100,7 @@ function parseConflicts(text: string): MergeConflict[] {
 
             conflicts.push({
                 context: text,
+                filePath: filePath,
                 originalCode: branchA.join('\n').trim(),
                 branchACode: branchA.join('\n').trim(),
                 branchBCode: branchB.join('\n').trim()
@@ -157,86 +142,182 @@ function resolveWithPython(conflict: MergeConflict): Promise<string> {
     });
 }
 
-function showLoadingWebview() {
+function showInitialWebview(conflict: MergeConflict) {
     if (activePanel) activePanel.dispose();
-    activePanel = vscode.window.createWebviewPanel('mergeResolution', 'Loading Resolution...', vscode.ViewColumn.Beside, { enableScripts: true });
-    activePanel.webview.html = `<!DOCTYPE html>
-    <html><head><style>
-    body { font-family: monospace; background: #0d1117; color: #c9d1d9; display: flex; justify-content: center; align-items: center; height: 100vh; }
-    .loader { border: 6px solid #161b22; border-top: 6px solid #58a6ff; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; }
-    @keyframes spin { 100% { transform: rotate(360deg); } }
-    </style></head><body>
-    <div class="loader"></div>
-    </body></html>`;
-}
-
-function showWebviewPanel(resolution: string) {
-    if (activePanel) activePanel.dispose();
-    activePanel = vscode.window.createWebviewPanel('mergeResolution', 'Merge Conflict Resolution', vscode.ViewColumn.Beside, { enableScripts: true });
-    activePanel.webview.html = getWebviewContent(resolution);
+    activePanel = vscode.window.createWebviewPanel('mergeResolution', 'Merge Conflict Resolution', vscode.ViewColumn.Beside, { 
+        enableScripts: true,
+        retainContextWhenHidden: true 
+    });
+    activePanel.webview.html = getInitialWebviewContent();
 
     const panel = activePanel;
-    panel.webview.onDidReceiveMessage(message => {
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) return;
-        if (message.command === 'accept') {
-            editor.edit(editBuilder => {
-                const start = new vscode.Position(0, 0);
-                const end = new vscode.Position(editor.document.lineCount + 1, 0);
-                editBuilder.delete(new vscode.Range(start, end));
-                editBuilder.insert(new vscode.Position(0, 0), message.resolution);
-            });
+    panel.webview.onDidReceiveMessage(async (message) => {
+        if (message.command === 'decline') {
             panel.dispose();
-        } else if (message.command === 'decline') {
-            panel.dispose();
+        } else if (message.command === 'accept') {
+            try {
+                // Replace file contents with the resolved code
+                const edit = new vscode.WorkspaceEdit();
+                const uri = vscode.Uri.file(conflict.filePath);
+                edit.replace(
+                    uri, 
+                    new vscode.Range(
+                        new vscode.Position(0, 0), 
+                        new vscode.Position(Number.MAX_VALUE, Number.MAX_VALUE)
+                    ), 
+                    message.resolution
+                );
+                
+                await vscode.workspace.applyEdit(edit);
+                await vscode.commands.executeCommand('workbench.action.files.save');
+                
+                vscode.window.showInformationMessage('✅ Merge conflict resolved successfully!');
+                panel.dispose();
+            } catch (error) {
+                vscode.window.showErrorMessage(`❌ Failed to apply resolution: ${error}`);
+            }
         }
     });
 }
 
-function getWebviewContent(resolution: string) {
+function updateWebviewWithResolution(resolution: string, conflict: MergeConflict) {
+    if (!activePanel) return;
+
+    activePanel.webview.postMessage({ 
+        command: 'updateResolution', 
+        resolution: resolution,
+        filepath: conflict.filePath
+    });
+}
+
+function getInitialWebviewContent() {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Merge Conflict Resolution</title>
     <style>
-        body { font-family: monospace; padding: 20px; background: #0d1117; color: #c9d1d9; }
-        #output { white-space: pre-wrap; border: 1px solid #30363d; padding: 15px; background: #161b22; min-height: 200px; border-radius: 6px; }
-        .blinking-cursor { display: inline-block; animation: blink 1s steps(2, start) infinite; color: #58a6ff; }
-        @keyframes blink { to { visibility: hidden; } }
-        button {
-            margin-top: 12px;
-            margin-right: 8px;
-            padding: 6px 12px;
-            background: #238636;
-            color: white;
+        :root {
+            --vscode-editor-background: #1E1E1E;
+            --vscode-editor-foreground: #D4D4D4;
+            --vscode-editorLineNumber-foreground: #858585;
+            --vscode-editor-selectionBackground: #264F78;
+            --vscode-button-background: #0E639C;
+            --vscode-button-hoverBackground: #1177BB;
+            --vscode-button-foreground: white;
+            --vscode-button-secondaryBackground: #3C3C3C;
+            --vscode-button-secondaryHoverBackground: #4A4A4A;
+        }
+        body {
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            background-color: var(--vscode-editor-background);
+            color: var(--vscode-editor-foreground);
+            padding: 20px;
+            line-height: 1.6;
+            margin: 0;
+        }
+        #output {
+            background-color: #2C2C2C;
+            border: 1px solid #3C3C3C;
+            border-radius: 4px;
+            padding: 15px;
+            white-space: pre-wrap;
+            font-size: 14px;
+            max-height: 400px;
+            overflow-y: auto;
+            position: relative;
+        }
+        .button-container {
+            display: flex;
+            justify-content: flex-start;
+            margin-top: 15px;
+            gap: 10px;
+        }
+        .btn {
+            padding: 8px 16px;
             border: none;
             border-radius: 4px;
             cursor: pointer;
+            font-weight: 600;
+            transition: background-color 0.2s;
         }
-        button.decline { background: #da3633; }
+        .btn-accept {
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+        }
+        .btn-accept:hover {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+        .btn-decline {
+            background-color: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-foreground);
+        }
+        .btn-decline:hover {
+            background-color: var(--vscode-button-secondaryHoverBackground);
+        }
+        .blinking-cursor {
+            display: inline-block;
+            animation: blink 1s steps(2, start) infinite;
+            color: var(--vscode-editor-foreground);
+        }
+        @keyframes blink { to { visibility: hidden; } }
+        #filepath {
+            color: var(--vscode-editorLineNumber-foreground);
+            margin-bottom: 10px;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
-    <h3>🔧 Suggested Merge Resolution</h3>
-    <div id="output"></div><span class="blinking-cursor">|</span><br/>
-    <button onclick="accept()">✅ Accept</button>
-    <button class="decline" onclick="decline()">❌ Decline</button>
+    <h3>🔧 Merge Conflict Resolution</h3>
+    <div id="filepath">Resolving conflict...</div>
+    <div id="output">
+        <span style="color: #6A9955;">// Generating optimal merge resolution...</span>
+        <span class="blinking-cursor">|</span>
+    </div>
+    <div class="button-container">
+        <button class="btn btn-accept" id="acceptBtn" disabled onclick="accept()">✅ Accept</button>
+        <button class="btn btn-decline" onclick="decline()">❌ Decline</button>
+    </div>
 
     <script>
         const vscode = acquireVsCodeApi();
-        const text = ${JSON.stringify(resolution)};
-        const outputDiv = document.getElementById("output");
-        let i = 0;
-        function animate() {
-            if (i < text.length) {
-                outputDiv.textContent += text[i++];
-                setTimeout(animate, 40);
+        let currentFilePath = '';
+
+        window.addEventListener('message', event => {
+            const message = event.data;
+            if (message.command === 'updateResolution') {
+                currentFilePath = message.filepath;
+                document.getElementById('filepath').textContent = \`File: \${currentFilePath}\`;
+                animateResolution(message.resolution);
             }
+        });
+
+        function animateResolution(text) {
+            const outputDiv = document.getElementById("output");
+            outputDiv.innerHTML = ''; // Clear previous content
+            let i = 0;
+            function animate() {
+                if (i < text.length) {
+                    outputDiv.textContent += text[i++];
+                    setTimeout(animate, 20);
+                } else {
+                    outputDiv.innerHTML += '<span class="blinking-cursor">|</span>';
+                    document.getElementById('acceptBtn').disabled = false;
+                }
+            }
+            animate();
         }
-        animate();
 
         function accept() {
-            vscode.postMessage({ command: 'accept', resolution: text });
+            const resolution = document.getElementById('output').textContent.replace(/\|$/, '').trim();
+            vscode.postMessage({ 
+                command: 'accept', 
+                resolution: resolution 
+            });
         }
+
         function decline() {
             vscode.postMessage({ command: 'decline' });
         }
