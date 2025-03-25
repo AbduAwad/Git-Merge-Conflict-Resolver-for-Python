@@ -2,3 +2,5 @@ myenv
 config.json
 node_modules
 out
+transformer_model/model_output_codet5_synthetic_30000-20250325T034854Z-001.zip
+transformer_model/model_output_codet5_synthetic_30000
