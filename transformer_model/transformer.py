@@ -1,329 +1,455 @@
-"""
-This script is used to fine-tune a T5 model on a large set of merge conflicts and it is ran in google colab on the T4 GPU.
-The model is fine-tuned on a dataset of 30,000 merge conflicts.
-This script trains, evaluates, and saves the model to Google Drive.
-The script also evaluates the model on a test set and saves the results to a CSV file.
-"""
-
-import os
 import torch
-from torch.utils.data import Dataset, DataLoader
-from transformers import (
-    RobertaTokenizerFast,
-    T5ForConditionalGeneration,
-    Trainer,
-    TrainingArguments,
-    DataCollatorForSeq2Seq,
-    default_data_collator
-)
-import pandas as pd
+import ast
 import numpy as np
-from tqdm import tqdm
-import re
-from sklearn.model_selection import train_test_split
-import evaluate
-
-# Device setup
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"🚀 Using device: {device}")
-
-MODEL_CONFIG = {
-    "model_name": "Salesforce/codet5-base",
-    "max_input_length": 768,
-    "max_output_length": 768,
-    "batch_size": 4,
-    "gradient_accumulation_steps": 4,
-    "learning_rate": 3e-5,
-    "num_epochs": 3,
-    "output_dir": "./model_output_codet5_synthetic_30000",
-    "fp16": True,
-}
+import json
+from typing import List, Tuple, Dict
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from sentence_transformers import SentenceTransformer
+from torch.utils.data import Dataset, DataLoader
 
 class MergeConflictDataset(Dataset):
-    def __init__(self, examples, tokenizer, max_input_length, max_output_length):
-        self.examples = examples
-        self.tokenizer = tokenizer
-        self.max_input_length = max_input_length
-        self.max_output_length = max_output_length
+    """
+    Custom PyTorch Dataset for merge conflict data
+    """
+    def __init__(self, dataset_path, num_samples=30000):
+        """
+        Initialize dataset from JSON file
+
+        Args:
+            dataset_path (str): Path to JSON dataset
+            num_samples (int): Number of samples to use
+        """
+        print(f"Loading dataset from {dataset_path}")
+        with open(dataset_path, 'r') as f:
+            full_data = json.load(f)
+
+        # Use only the first num_samples
+        self.data = full_data[:num_samples]
+
+        print(f"Using {len(self.data)} merge conflict samples")
 
     def __len__(self):
-        return len(self.examples)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        example = self.examples[idx]
-        input_text = (
-            f"Resolve the following merge conflict:\n"
-            f"<ORIGINAL>\n{example['original']}\n</ORIGINAL>\n"
-            f"<BRANCH_A>\n{example['branch_a']}\n</BRANCH_A>\n"
-            f"<BRANCH_B>\n{example['branch_b']}\n</BRANCH_B>\n"
-            f"<MERGED>"
-        )
+        """
+        Get a single item from the dataset
 
-        output_text = example['merged']
+        Returns:
+            dict: Contains 'original', 'branch_a', 'branch_b', and 'merged' code
+        """
+        return self.data[idx]
 
-        input_encodings = self.tokenizer(
-            input_text,
-            truncation=True,
-            max_length=self.max_input_length,
-            padding="max_length",
-            return_tensors="pt"
-        )
+class AdvancedMergeConflictResolver:
+    def __init__(self,
+                 model_name="Salesforce/codet5-base",
+                 embedding_model="all-MiniLM-L6-v2",
+                 dataset_path="/content/drive/MyDrive/synthetic_dataset/synthetic_merge_conflicts_50000_batched.json"):
+        """
+        Initialize merge conflict resolver with code generation, embedding models, and dataset
 
-        output_encodings = self.tokenizer(
-            output_text,
-            truncation=True,
-            max_length=self.max_output_length,
-            padding="max_length",
-            return_tensors="pt"
-        )
+        Args:
+            model_name (str): Transformer model for code generation
+            embedding_model (str): Model for semantic embedding
+            dataset_path (str): Path to merge conflict dataset
+        """
+        # Initialize tokenizer and code generation model
+        print(f"Initializing code generation model: {model_name}")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
 
-        input_ids = input_encodings["input_ids"].squeeze()
-        attention_mask = input_encodings["attention_mask"].squeeze()
-        labels = output_encodings["input_ids"].squeeze()
-        labels[labels == self.tokenizer.pad_token_id] = -100
+        # Initialize semantic embedding model
+        print(f"Initializing embedding model: {embedding_model}")
+        self.embedding_model = SentenceTransformer(embedding_model)
 
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels.long()
-        }
+        # Load dataset (first 50 samples)
+        self.dataset = MergeConflictDataset(dataset_path, num_samples=30000)
 
-def custom_data_collator(features):
-    # Use HuggingFace's default collator
-    batch = default_data_collator(features)
+        # Move models to GPU if available
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
 
-    # Convert labels to tensor efficiently
-    if isinstance(batch["labels"], list):
-        batch["labels"] = torch.tensor(np.array(batch["labels"]), dtype=torch.int64)
+    def _advanced_preprocessing(self, text: str) -> str:
+        """
+        Advanced preprocessing with multiple cleaning steps
 
-    return batch
+        Args:
+            text (str): Input code text
 
-def prepare_dataset(json_path="/content/drive/MyDrive/synthetic_dataset/synthetic_merge_conflicts_50000_batched.json", max_samples=30000):
-    import json
+        Returns:
+            str: Preprocessed code text
+        """
+        # Remove conflict markers
+        lines = [
+            line for line in text.split('\n')
+            if not line.startswith(('<<<<<<', '=======', '>>>>>>>'))
+        ]
 
-    if not os.path.exists(json_path):
-        print(f"❌ JSON dataset file {json_path} not found.")
-        return [], [], []
+        # Normalize whitespace and indentation
+        cleaned_lines = [line.rstrip() for line in lines]
 
-    with open(json_path, "r") as f:
-        data = json.load(f)
+        # Resolve and consolidate imports
+        imports = set()
+        non_import_lines = []
+        for line in cleaned_lines:
+            if line.startswith(('import ', 'from ')):
+                if line not in imports:
+                    imports.add(line)
+            else:
+                non_import_lines.append(line)
 
-    if not data:
-        print("❌ No data found in the JSON file.")
-        return [], [], []
+        # Combine cleaned imports and code
+        cleaned_text = '\n'.join(sorted(list(imports)) + non_import_lines)
+        return cleaned_text
 
-    if len(data) < max_samples:
-        print(f"⚠️ Only {len(data)} samples available, less than requested {max_samples}")
+    def _generate_code_embedding(self, code: str) -> np.ndarray:
+        """
+        Generate semantic embedding for code snippet
 
-    examples = data[:max_samples]
+        Args:
+            code (str): Code text
 
-    train_examples, test_examples = train_test_split(examples, test_size=0.2, random_state=42)
-    train_examples, val_examples = train_test_split(train_examples, test_size=0.1, random_state=42)
-
-    print(f"✅ Loaded from JSON. Train={len(train_examples)}, Val={len(val_examples)}, Test={len(test_examples)}")
-    return train_examples, val_examples, test_examples
-
-def process_file_content(content):
-    content = re.sub(r'\n\s*\n', '\n\n', content)
-    return content.replace('\r\n', '\n').strip()
-
-def train_model():
-    try:
-        print("🔄 Loading tokenizer and model...")
-        tokenizer = RobertaTokenizerFast.from_pretrained(MODEL_CONFIG["model_name"])
-        model = T5ForConditionalGeneration.from_pretrained(MODEL_CONFIG["model_name"])
-        model.config.use_cache = False
-        model.to(device)
-
-        print("📚 Preparing datasets...")
-        train_examples, val_examples, test_examples = prepare_dataset()
-        if len(train_examples) == 0:
-            print("❌ No training data. Exiting.")
-            return None, None, []
-
-        train_dataset = MergeConflictDataset(train_examples, tokenizer, MODEL_CONFIG["max_input_length"], MODEL_CONFIG["max_output_length"])
-        val_dataset = MergeConflictDataset(val_examples, tokenizer, MODEL_CONFIG["max_input_length"], MODEL_CONFIG["max_output_length"])
-
-        data_collator = DataCollatorForSeq2Seq(
-            tokenizer=tokenizer,
-            model=model,
-            padding="max_length",
-            max_length=MODEL_CONFIG["max_input_length"]
-        )
-
-        training_args = TrainingArguments(
-            output_dir=MODEL_CONFIG["output_dir"],
-            num_train_epochs=MODEL_CONFIG["num_epochs"],
-            per_device_train_batch_size=MODEL_CONFIG["batch_size"],
-            per_device_eval_batch_size=MODEL_CONFIG["batch_size"],
-            gradient_accumulation_steps=MODEL_CONFIG["gradient_accumulation_steps"],
-            learning_rate=MODEL_CONFIG["learning_rate"],
-            weight_decay=0.01,
-            eval_strategy="epoch",
-            save_strategy="epoch",
-            load_best_model_at_end=True,
-            logging_dir="./logs",
-            logging_steps=10,
-            fp16=MODEL_CONFIG["fp16"],
-            gradient_checkpointing=True,
-            report_to=[],
-        )
-
-        trainer = Trainer(
-          model=model,
-          args=training_args,
-          train_dataset=train_dataset,
-          eval_dataset=val_dataset,
-          data_collator=custom_data_collator,  # ✅ Replace this
-        )
-
-
-        print("🚀 Starting training...")
-        trainer.train()
-
-        model.save_pretrained(os.path.join(MODEL_CONFIG["output_dir"], "final_model"))
-        tokenizer.save_pretrained(os.path.join(MODEL_CONFIG["output_dir"], "final_model"))
-
+        Returns:
+            np.ndarray: Semantic embedding vector
+        """
         try:
-            drive_output_path = "/content/drive/MyDrive/model_output_codet5_synthetic_30000"
-            os.makedirs(drive_output_path, exist_ok=True)
-            import shutil
-            shutil.copytree(
-                os.path.join(MODEL_CONFIG["output_dir"], "final_model"),
-                os.path.join(drive_output_path, "final_model"),
-                dirs_exist_ok=True
-            )
-            print(f"✅ Model saved to Google Drive at {drive_output_path}/final_model")
+            return self.embedding_model.encode([code])[0]
         except Exception as e:
-            print(f"⚠️ Failed to save model to Google Drive: {e}")
+            print(f"Embedding generation failed: {e}")
+            return np.zeros(384)  # Default embedding size for all-MiniLM-L6-v2
 
-        return model, tokenizer, test_examples
+    def _compute_semantic_similarity(self, code1: str, code2: str) -> float:
+        """
+        Compute semantic similarity between two code snippets
 
-    except Exception as e:
-        import traceback
-        print(f"❌ Error in training: {e}")
-        print(traceback.format_exc())
-        return None, None, []
+        Args:
+            code1 (str): First code snippet
+            code2 (str): Second code snippet
 
+        Returns:
+            float: Semantic similarity score
+        """
+        embedding1 = self._generate_code_embedding(code1)
+        embedding2 = self._generate_code_embedding(code2)
 
-def evaluate_model(model, tokenizer, test_examples):
-    # Load metrics
-    rouge = evaluate.load("rouge")
-    bleu = evaluate.load("bleu")
+        # Compute cosine similarity
+        similarity = np.dot(embedding1, embedding2) / (
+            np.linalg.norm(embedding1) * np.linalg.norm(embedding2)
+        )
+        return float(similarity)
 
-    # Prediction storage
-    predictions = []
-    references = []
-    exact_matches = []
+    def _extract_function_signature(self, code: str) -> str:
+        """
+        Extract function signature for semantic comparison
 
-    # Go through test examples
-    for example in test_examples:
-        pred = apply_model_to_conflict(model, tokenizer, example["original"], example["branch_a"], example["branch_b"])
-        gold = example["merged"]
+        Args:
+            code (str): Code text
 
-        # Normalize for exact match
-        norm_pred = re.sub(r'\s+', ' ', pred.strip())
-        norm_gold = re.sub(r'\s+', ' ', gold.strip())
+        Returns:
+            str: Function signature or empty string
+        """
+        try:
+            tree = ast.parse(code)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef):
+                    # Extract function name, arguments, and return annotation
+                    return f"{node.name}{ast.unparse(node.args)}"
+        except SyntaxError:
+            return ""
+        return ""
 
-        predictions.append(pred)
-        references.append(gold)
-        exact_matches.append(norm_pred == norm_gold)
+    def _validate_syntax(self, code: str) -> bool:
+        """
+        Validate code syntax
 
-    # Compute scores
-    rouge_result = rouge.compute(predictions=predictions, references=references)
-    bleu_result = bleu.compute(predictions=predictions, references=[[ref] for ref in references])
-    exact_match_rate = np.mean(exact_matches)
+        Args:
+            code (str): Code text
 
-    # Save to CSV
-    df = pd.DataFrame({
-        "original": [ex["original"] for ex in test_examples],
-        "branch_a": [ex["branch_a"] for ex in test_examples],
-        "branch_b": [ex["branch_b"] for ex in test_examples],
-        "predicted_merge": predictions,
-        "actual_merge": references,
-        "exact_match": exact_matches
-    })
+        Returns:
+            bool: True if syntax is valid, False otherwise
+        """
+        try:
+            ast.parse(code)
+            return True
+        except SyntaxError:
+            print("Syntax validation failed")
+            return False
 
-    metrics_row = {
-        "original": "METRICS",
-        "branch_a": "",
-        "branch_b": "",
-        "predicted_merge": f"BLEU: {bleu_result['bleu']:.4f}",
-        "actual_merge": f"ROUGE-L: {rouge_result['rougeL']:.4f}",
-        "exact_match": f"{exact_match_rate:.4f}"
-    }
+    def _evaluate_merge_quality(
+        self,
+        original: str,
+        merged_code: str
+    ) -> float:
+        """
+        Evaluate quality of merged code
 
-    # Append row with metrics
-    df = pd.concat([df, pd.DataFrame([metrics_row])], ignore_index=True)
+        Args:
+            original (str): Original code
+            merged_code (str): Merged code
 
-    # Save
-    df.to_csv("codet5_test_eval_results.csv", index=False)
-    print("📁 Saved test results with metrics to codet5_test_eval_results.csv")
+        Returns:
+            float: Merge quality score
+        """
+        score = 0.0
 
-    # save to google drive:
-    try:
-        drive_output_path = "/content/drive/MyDrive/model_output_codet5_synthetic_30000"
-        os.makedirs(drive_output_path, exist_ok=True)
-        df.to_csv(os.path.join(drive_output_path, "codet5_test_eval_results.csv"), index=False)
-        print(f"✅ Test results saved to Google Drive at {drive_output_path}/codet5_test_eval_results.csv")
-    except Exception as e:
-        print(f"⚠️ Failed to save test results to Google Drive: {e}")
+        # Syntax validation
+        if self._validate_syntax(merged_code):
+            score += 0.3
 
-    print(f"BLEU: {bleu_result['bleu']:.4f}")
-    print(f"ROUGE-L: {rouge_result['rougeL']:.4f}")
-    print(f"Exact Match Rate: {exact_match_rate:.4f}")
+        # Function signature preservation
+        original_signature = self._extract_function_signature(original)
+        merged_signature = self._extract_function_signature(merged_code)
 
+        if original_signature == merged_signature:
+            score += 0.2
 
-def apply_model_to_conflict(model, tokenizer, original, branch_a, branch_b):
-    input_text = (
-        f"Resolve the following merge conflict:\n"
-        f"<ORIGINAL>\n{original}\n</ORIGINAL>\n"
-        f"<BRANCH_A>\n{branch_a}\n</BRANCH_A>\n"
-        f"<BRANCH_B>\n{branch_b}\n</BRANCH_B>\n"
-        f"<MERGED>"
-    )
+        # Semantic similarity
+        semantic_score = self._compute_semantic_similarity(original, merged_code)
+        score += 0.3 * semantic_score
 
-    inputs = tokenizer(
-        input_text,
-        truncation=True,
-        max_length=768,
-        padding="max_length",
-        return_tensors="pt"
-    )
+        # Code complexity metric
+        line_count_diff = abs(len(original.split('\n')) - len(merged_code.split('\n')))
+        score -= min(0.2, 0.05 * line_count_diff)
 
-    input_ids = inputs["input_ids"].to(device)
-    attention_mask = inputs["attention_mask"].to(device)
+        return max(0, min(1.0, score))
 
-    outputs = model.generate(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        max_length=768,
-        num_beams=4,
-        early_stopping=True,
-        no_repeat_ngram_size=2
-    )
+    def prepare_dataloader(self, batch_size=16, shuffle=True):
+        """
+        Prepare DataLoader for training or inference
 
-    merged = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    merged = re.sub(r"</?MERGED>", "", merged).strip()
-    return merged
+        Args:
+            batch_size (int): Batch size for DataLoader
+            shuffle (bool): Whether to shuffle the dataset
 
+        Returns:
+            torch.utils.data.DataLoader: Configured DataLoader
+        """
+        return DataLoader(
+            self.dataset,
+            batch_size=batch_size,
+            shuffle=shuffle
+        )
+
+    def train(self,
+              epochs=3,
+              learning_rate=5e-5,
+              batch_size=16):
+        """
+        Fine-tune the model on the merge conflict dataset
+
+        Args:
+            epochs (int): Number of training epochs
+            learning_rate (float): Learning rate for training
+            batch_size (int): Batch size for training
+        """
+        # Prepare optimizer and dataloader
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
+        dataloader = self.prepare_dataloader(batch_size=batch_size)
+
+        print(f"Starting training for {epochs} epochs")
+
+        for epoch in range(epochs):
+            self.model.train()
+            total_loss = 0
+
+            for batch in dataloader:
+                # Prepare inputs and labels
+                inputs = self.tokenizer(
+                    [
+                        f"Resolve merge conflict between two code branches.\n"
+                        f"Original code:\n{orig}\n\n"
+                        f"Branch A changes:\n{a}\n\n"
+                        f"Branch B changes:\n{b}\n\n"
+                        f"Provide the merged code:"
+                        for orig, a, b in zip(batch['original'], batch['branch_a'], batch['branch_b'])
+                    ],
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=512
+                ).to(self.device)
+
+                labels = self.tokenizer(
+                    batch['merged'],
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=512
+                ).input_ids.to(self.device)
+
+                # Forward pass
+                outputs = self.model(**inputs, labels=labels)
+                loss = outputs.loss
+
+                # Backward pass and optimization
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss.item()
+
+            # Log epoch statistics
+            avg_loss = total_loss / len(dataloader)
+            print(f"Epoch {epoch+1}/{epochs}, Average Loss: {avg_loss:.4f}")
+
+        print("Training completed")
+
+    def resolve_merge_conflict(
+        self,
+        original: str,
+        branch_a: str,
+        branch_b: str,
+        max_tries: int = 3
+    ) -> str:
+        """
+        Resolve merge conflict between two code branches
+
+        Args:
+            original (str): Original code
+            branch_a (str): Changes from first branch
+            branch_b (str): Changes from second branch
+            max_tries (int): Number of generation attempts
+
+        Returns:
+            str: Merged code
+        """
+        # Note: After training, this method will use the fine-tuned model
+        original = self._advanced_preprocessing(original)
+        branch_a = self._advanced_preprocessing(branch_a)
+        branch_b = self._advanced_preprocessing(branch_b)
+
+        input_text = (
+            f"Resolve merge conflict between two code branches.\n"
+            f"Original code:\n{original}\n\n"
+            f"Branch A changes:\n{branch_a}\n\n"
+            f"Branch B changes:\n{branch_b}\n\n"
+            f"Provide the merged code:"
+        )
+
+        # Generation and processing remain the same
+        candidates = []
+
+        for attempt in range(max_tries):
+            inputs = self.tokenizer(
+                input_text,
+                return_tensors="pt",
+                max_length=512,
+                truncation=True
+            ).to(self.device)
+
+            outputs = self.model.generate(
+                **inputs,
+                max_length=512,
+                num_return_sequences=1,
+                do_sample=True,
+                temperature=0.7 + (0.1 * attempt),
+                top_k=50,
+                top_p=0.95,
+                repetition_penalty=1.2
+            )
+
+            decoded_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+            decoded_output = self._advanced_preprocessing(decoded_output)
+
+            if self._validate_syntax(decoded_output):
+                quality_score = self._evaluate_merge_quality(original, decoded_output)
+                candidates.append((decoded_output, quality_score))
+
+        if candidates:
+            best_candidate = max(candidates, key=lambda x: x[1])[0]
+            return best_candidate
+
+        print("No valid merge candidates found. Attempting fallback merge.")
+        return original
+
+import os
 
 def main():
-    model_path = os.path.join(MODEL_CONFIG["output_dir"], "final_model")
-    print(f"🔍 Checking for existing model at {model_path}")
-    if os.path.exists(model_path):
-        print("📦 Loading existing model...")
-        tokenizer = RobertaTokenizerFast.from_pretrained(model_path)
-        model = T5ForConditionalGeneration.from_pretrained(model_path)
-        model.to(device)
-        _, _, test_examples = prepare_dataset()
+    # Initialize the merge conflict resolver with dataset
+    resolver = AdvancedMergeConflictResolver()
+
+    # Optional: Train the model
+    resolver.train(epochs=3, learning_rate=5e-5, batch_size=16)
+
+    output_dir = "merge_conflict_model"
+    final_model_path = os.path.join(output_dir, "final_model")
+    os.makedirs(final_model_path, exist_ok=True)
+    resolver.model.save_pretrained(final_model_path)
+    resolver.tokenizer.save_pretrained(final_model_path)
+
+    try:
+        drive_output_path = "/content/drive/MyDrive/merge_conflict_model"
+        drive_final_model_path = os.path.join(drive_output_path, "final_model")
+        os.makedirs(drive_final_model_path, exist_ok=True)
+        import shutil
+        shutil.copytree(
+            final_model_path,
+            drive_final_model_path,
+            dirs_exist_ok=True
+        )
+        print(f"✅ Model saved to Google Drive at {drive_output_path}/final_model")
+    except Exception as e:
+        print(f"⚠️ Failed to save model to Google Drive: {e}")
+
+
+    # Optional: Test the merge conflict resolution
+    test_case = {
+        "original": """
+def calculate_sum(a, b):
+    return a + b
+""",
+        "branch_a": """
+def calculate_sum(a, b):
+    # Added type hints
+    return a + b
+""",
+        "branch_b": """
+def calculate_sum(a, b):
+    return a + b  # Simple addition
+"""
+    }
+
+    merged_code = resolver.resolve_merge_conflict(
+        test_case["original"],
+        test_case["branch_a"],
+        test_case["branch_b"]
+    )
+
+    print("Merged Code:")
+    print(merged_code)
+
+    test_case2 = {
+        "original": """
+def fib(n):
+    if n <= 1:
+        return n
     else:
-        print("🆕 Training new model...")
-        model, tokenizer, test_examples = train_model()
+        return fib(n-1) + fib(n-2)
+        """,
+        "branch_a": """
+def fib(n):
+    if n <= 1:
+        return n
+    else:
+        return fib(n-1) + fib(n-2)
+        """,
+        "branch_b": """
+def fib(n):
+    if n <= 1:
+        return n
+    else:
+        return fib(n-1) + fib(n-2) + 1"""
+    }
 
-    if model and tokenizer and test_examples:
-        evaluate_model(model, tokenizer, test_examples)
+    merged_code = resolver.resolve_merge_conflict(
+        test_case2["original"],
+        test_case2["branch_a"],
+        test_case2["branch_b"]
+    )
 
+    print("Merged Code:")
+    print(merged_code)
 
 if __name__ == "__main__":
     main()

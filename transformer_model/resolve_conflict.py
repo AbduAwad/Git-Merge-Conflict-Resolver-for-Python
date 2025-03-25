@@ -1,77 +1,48 @@
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from sentence_transformers import SentenceTransformer
+
+# Specify the directory where you saved the model
+model_path = "/content/drive/MyDrive/merge_conflict_model/final_model"
+
+# Load the tokenizer
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+
+# Load the trained model
+model = AutoModelForSeq2SeqLM.from_pretrained(model_path)
+
+# If you also want to use the embedding model (SentenceTransformer)
+embedding_model_name = "all-MiniLM-L6-v2" # Or the one you initialized with
+embedding_model = SentenceTransformer(embedding_model_name)
+
+# Now you can use 'model' and 'tokenizer' for inference, for example, in a
+# modified 'resolve_merge_conflict' function or a new function.
+
+# Example of using the loaded model for inference (simplified):
+original_code = """
+def greet(name):
+    return "Hello, " + name
 """
-The VsCode Extension calls this script to resolve the merge conflict.
+branch_a_code = """
+def greet(name):
+    return f"Hi {name}!"
+"""
+branch_b_code = """
+def greet(name):
+    # Formal greeting
+    return "Greetings, " + name
 """
 
-from transformers import T5ForConditionalGeneration, RobertaTokenizerFast
-import torch
-import re
-import sys
-import json
-import os
-import time
+input_text = (
+    f"Resolve merge conflict between two code branches.\n"
+    f"Original code:\n{original_code}\n\n"
+    f"Branch A changes:\n{branch_a_code}\n\n"
+    f"Branch B changes:\n{branch_b_code}\n\n"
+    f"Provide the merged code:"
+)
 
-# Load model and tokenizer
-model_path = r"C:\Users\sheri\OneDrive - Carleton University\Comp_Courses\Comp4107\FINAL_PROJECT\COMP4107_FP\transformer_model\model_output_codet5\final_model"
+inputs = tokenizer(input_text, return_tensors="pt", max_length=512, truncation=True)
+outputs = model.generate(**inputs, max_length=512, num_return_sequences=1)
+resolved_code = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-model = T5ForConditionalGeneration.from_pretrained(model_path)
-tokenizer = RobertaTokenizerFast.from_pretrained(model_path)
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model.to(device)
-
-def resolve_merge_conflict(original, a, b):
-    input_text = (
-        f"Resolve the following merge conflict, ensuring the output code is correct:\n"
-        f"<ORIGINAL>\n{original}\n</ORIGINAL>\n"
-        f"<BRANCH_A>\n{a}\n</BRANCH_A>\n"
-        f"<BRANCH_B>\n{b}\n</BRANCH_B>\n"
-        f"<MERGED>"
-    )
-
-
-    # ✅ Enhanced tokenization with more robust handling
-    inputs = tokenizer(
-        input_text,
-        truncation=True,
-        max_length=752,
-        padding=True,
-        return_tensors="pt"
-    )
-
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-
-    # ✅ More sophisticated generation parameters
-    outputs = model.generate(
-        **inputs,
-        max_length=752,
-        num_beams=8,  # Increased beam search
-        early_stopping=True,
-        do_sample=True,
-        no_repeat_ngram_size=3,  # Prevent repetitive generations
-        temperature=0.7,  # Add some controlled randomness
-        top_k=50,  # Top-k sampling for diversity
-        top_p=0.95,  # Nucleus sampling
-        repetition_penalty=1.2,  # Slightly discourage repeating phrases
-    )
-
-    # ✅ More robust decoding
-    merged = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-    # ✅ Advanced cleanup and formatting
-    merged = re.sub(r'\n{3,}', '\n\n', merged).strip()
-    return merged if merged else None
-
-# 🔄 Read input from stdin (from the extension)
-if __name__ == "__main__":
-    input_json = sys.stdin.read()
-    if not input_json.strip():
-        print("⚠️ No input received.")
-        sys.exit(1)
-
-    try:
-        payload = json.loads(input_json)
-        result = resolve_merge_conflict(payload['original'], payload['branchA'], payload['branchB'])
-        print(result)
-    except Exception as e:
-        print(f"⚠️ Error resolving conflict: {e}", file=sys.stderr)
-        sys.exit(1)
+print("Resolved Code (from loaded model):")
+print(resolved_code)

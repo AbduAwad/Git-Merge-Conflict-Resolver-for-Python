@@ -39,7 +39,7 @@ $ source myenv/Scripts/activate
 3. Install the required packages using the following command:
 
 ```bash
-pip install torch transformers pandas numpy tqdm scikit-learn
+pip install -r requirements.txt
 ```
 
 _____
