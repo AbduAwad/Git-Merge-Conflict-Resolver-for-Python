@@ -1,2 +1,4 @@
 myenv
 config.json
+node_modules
+out

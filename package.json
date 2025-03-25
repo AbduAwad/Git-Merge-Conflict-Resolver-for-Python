@@ -1,0 +1,19 @@
+{
+	"name": "merge-conflict-reader",
+	"version": "1.0.0",
+	"engines": {
+		"vscode": "^1.85.0"
+	},
+	"contributes": {
+		"commands": [
+			{
+				"command": "mergeConflictReader.findConflicts",
+				"title": "Find Merge Conflicts"
+			}
+		]
+	},
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"main": "./out/extension.js"
+}
