@@ -18,7 +18,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(conflictStatusBarItem);
 
     // Register command to find conflicts
-    const findConflictsCommand = vscode.commands.registerCommand('mergeConflictReader.findConflicts', () => {
+    const findConflictsCommand = vscode.commands.registerCommand('mergeConflictReader.findConflicts', async () => {
         const editor = vscode.window.activeTextEditor;
         
         if (!editor) {
@@ -60,6 +60,32 @@ export function activate(context: vscode.ExtensionContext) {
         });
 
         vscode.window.showInformationMessage(`Found ${conflicts.length} merge conflict(s). Check the OUTPUT panel.`);
+
+        const modelOptions = [
+            {
+              label: "🧠 CodeT5",
+              description: "Fine-tuned Transformer",
+              detail: "Generates a custom resolution using a fine-tuned CodeT5 model trained on thousands of realistic merge conflicts.",
+              value: "codet5"
+            },
+            {
+              label: "🧪 RNN",
+              description: "Binary Classifier",
+              detail: "Classifies the better branch and selects it as the resolved output.",
+              value: "custom"
+            }
+          ];
+          
+        
+          const selected = await vscode.window.showQuickPick(modelOptions, {
+            placeHolder: "Select a model to resolve merge conflicts"
+          });
+        
+          if (!selected) return;
+        
+          // Your logic after selecting a model
+          vscode.window.showInformationMessage(`✅ Selected model: ${selected.label}`);
+
     });
 
     context.subscriptions.push(findConflictsCommand);
