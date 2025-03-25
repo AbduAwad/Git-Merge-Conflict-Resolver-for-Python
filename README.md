@@ -60,3 +60,18 @@ _____
 - run 'test_ransformer.py' in google colab in same notebook but in a different cell under the training cell. 
 
 - **test_transformer.py:** Script to test the trained model by accessing the outputed model in the model_output/final_model folder. You can call the model on a conflict and it will output the predicted resolution.
+
+_____
+### Test VsCode Extension:
+
+1. Compile the typescript files using the following command:
+
+```bash
+npx tsc
+```
+
+2. Run a live instance of the extension in the extension development host:
+
+    - Open the src/extension.ts file in Visual Studio Code
+    - press 'ctrl + shift + p' and select 'Debug: Start Debugging'
+    - Select 'Extension Development Host' from Dropdown Menu.
