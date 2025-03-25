@@ -2,7 +2,7 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from sentence_transformers import SentenceTransformer
 
 # Specify the directory where you saved the model
-model_path = "/content/drive/MyDrive/merge_conflict_model"
+model_path = "/content/drive/MyDrive/merge_conflict_model/final_model"
 
 # Load the tokenizer
 tokenizer = AutoTokenizer.from_pretrained(model_path)
