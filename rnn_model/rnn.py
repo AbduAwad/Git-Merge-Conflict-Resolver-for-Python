@@ -37,7 +37,7 @@ UNK_IDX = 1
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load synthetic dataset
-def load_synthetic_json_dataset(json_path, max_samples=1000):
+def load_synthetic_json_dataset(json_path, max_samples=None):
     with open(json_path, 'r') as f:
         examples = json.load(f)
 
