@@ -37,7 +37,7 @@ UNK_IDX = 1
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load synthetic dataset
-def load_synthetic_json_dataset(json_path, max_samples=None):
+def load_synthetic_json_dataset(json_path, max_samples=500):
     with open(json_path, 'r') as f:
         examples = json.load(f)
 
@@ -211,7 +211,7 @@ def evaluate_rnn(model, test_loader):
 
     print(f"Test Accuracy: {correct / total:.4f}")
 
-# Main entry point
+# Main func
 if __name__ == "__main__":
     train_loader, val_loader, test_loader, word_to_idx, keras_data = prepare_rnn_dataset()
 
@@ -246,3 +246,18 @@ if __name__ == "__main__":
 
     test_loss, test_acc = keras_model.evaluate(X_test, y_test)
     print(f"Keras Test Accuracy: {test_acc:.4f}")
+
+    # Save Keras model locally
+    output_dir = "rnn_model"
+    final_model_path = os.path.join(output_dir, "final_model")
+    os.makedirs(final_model_path, exist_ok=True)
+
+    # Save entire model (architecture + weights + optimizer state)
+    keras_model.save(os.path.join(final_model_path, "keras_model"))
+
+    # Save vocabulary used for training
+    with open(os.path.join(final_model_path, "vocab.json"), "w") as f:
+        json.dump(word_to_idx, f)
+
+    print(f" Keras model and vocab saved to {final_model_path}")
+
