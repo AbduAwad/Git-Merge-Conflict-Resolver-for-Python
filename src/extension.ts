@@ -1,4 +1,3 @@
-// src/extension.ts
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 import * as path from 'path';
@@ -10,6 +9,13 @@ interface MergeConflict {
     branchBCode: string;
     context: string;
     filePath: string;
+}
+
+interface RnnResult {
+    selected_branch: "A" | "B";
+    confidence: number;
+    resolved_code: string;
+    error?: string;
 }
 
 let activePanel: vscode.WebviewPanel | null = null;
@@ -51,7 +57,7 @@ export function activate(context: vscode.ExtensionContext) {
                 label: "🧪 RNN",
                 description: "Binary Classifier",
                 detail: "Classifies the better branch and selects it as the resolved output.",
-                value: "custom"
+                value: "rnn"
             }
         ];
 
@@ -64,12 +70,30 @@ export function activate(context: vscode.ExtensionContext) {
 
         if (selected.value === "codet5") {
             for (const conflict of conflicts) {
-                showInitialWebview(conflict);
-                const resolution = await resolveWithPython(conflict);
+                showInitialWebview(conflict, false);
+                const resolution = await resolveWithPython(conflict, 'codet5');
                 if (resolution) {
                     if (activePanel) updateWebviewWithResolution(resolution, conflict);
                 } else {
                     vscode.window.showErrorMessage('⚠️ Could not generate resolution');
+                }
+            }
+        } else if (selected.value === "rnn") {
+            for (const conflict of conflicts) {
+                showInitialWebview(conflict, true);
+                const result = await resolveWithPython(conflict, 'rnn');
+                if (result) {
+                    try {
+                        const rnnResult = JSON.parse(result) as RnnResult;
+                        if (rnnResult.error) {
+                            vscode.window.showErrorMessage(`⚠️ RNN model error: ${rnnResult.error}`);
+                        }
+                        if (activePanel) updateWebviewWithRnnResolution(rnnResult, conflict);
+                    } catch (e) {
+                        vscode.window.showErrorMessage('⚠️ Could not parse RNN model result');
+                    }
+                } else {
+                    vscode.window.showErrorMessage('⚠️ Could not classify conflict');
                 }
             }
         }
@@ -112,9 +136,17 @@ function parseConflicts(text: string, filePath: string): MergeConflict[] {
     return conflicts;
 }
 
-function resolveWithPython(conflict: MergeConflict): Promise<string> {
+function resolveWithPython(conflict: MergeConflict, modelType: 'codet5' | 'rnn'): Promise<string> {
     return new Promise((resolve, reject) => {
-        const scriptPath = path.join(__dirname, '..', 'transformer_model', 'resolve_conflict.py');
+
+        // Choose the appropriate script based on the model type
+        const scriptName = modelType === 'codet5' ? 'resolve_conflict.py' : 'rnn_classifier.py';
+        
+        // Update this path to match your actual directory structure
+        const scriptPath = modelType === 'codet5' 
+            ? path.join(__dirname, '..', 'transformer_model', scriptName)
+            : path.join(__dirname, '..', 'rnn_model', scriptName);
+
         const input = JSON.stringify({
             original: conflict.originalCode ?? '',
             branchA: conflict.branchACode,
@@ -129,26 +161,40 @@ function resolveWithPython(conflict: MergeConflict): Promise<string> {
 
         child.stdout.on('data', data => output += data);
         child.stderr.on('data', data => error += data);
+
         child.on('close', code => {
-            if (code !== 0 || error) {
-                vscode.window.showErrorMessage(`❌ Python error: ${error}`);
-                return reject(error);
+            try {
+                const cleaned = output.trim();
+            
+                if (modelType === 'rnn') {
+                    // RNN returns JSON
+                    if (!cleaned.startsWith("{") || !cleaned.endsWith("}")) {
+                        throw new Error("Expected JSON output but got plain text");
+                    }
+                    resolve(cleaned);
+                } else {
+                    resolve(cleaned); // CodeT5 returns plain text
+                }
+            } catch (err) {
+                vscode.window.showErrorMessage(`❌ Failed to parse Python output:\n${output}\n\n⚠️ stderr:\n${error}`);
+                reject(error || 'Invalid output');
             }
-            resolve(output.trim());
+            
         });
+        
 
         child.stdin.write(input);
         child.stdin.end();
     });
 }
 
-function showInitialWebview(conflict: MergeConflict) {
+function showInitialWebview(conflict: MergeConflict, isRnn: boolean = false) {
     if (activePanel) activePanel.dispose();
     activePanel = vscode.window.createWebviewPanel('mergeResolution', 'Merge Conflict Resolution', vscode.ViewColumn.Beside, { 
         enableScripts: true,
         retainContextWhenHidden: true 
     });
-    activePanel.webview.html = getInitialWebviewContent();
+    activePanel.webview.html = getInitialWebviewContent(isRnn);
 
     const panel = activePanel;
     panel.webview.onDidReceiveMessage(async (message) => {
@@ -190,7 +236,17 @@ function updateWebviewWithResolution(resolution: string, conflict: MergeConflict
     });
 }
 
-function getInitialWebviewContent() {
+function updateWebviewWithRnnResolution(result: RnnResult, conflict: MergeConflict) {
+    if (!activePanel) return;
+
+    activePanel.webview.postMessage({ 
+        command: 'updateRnnResolution', 
+        result: result,
+        filepath: conflict.filePath
+    });
+}
+
+function getInitialWebviewContent(isRnn: boolean = false) {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -267,13 +323,47 @@ function getInitialWebviewContent() {
             margin-bottom: 10px;
             font-style: italic;
         }
+        .branch-info {
+            background-color: #3C3C3C;
+            border-radius: 4px;
+            padding: 8px 12px;
+            margin-bottom: 15px;
+            display: ${isRnn ? 'flex' : 'none'};
+            align-items: center;
+            gap: 10px;
+        }
+        .branch-badge {
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-weight: bold;
+        }
+        .branch-a {
+            background-color: #3498db;
+            color: white;
+        }
+        .branch-b {
+            background-color: #9b59b6;
+            color: white;
+        }
+        .confidence {
+            margin-left: auto;
+            font-style: italic;
+            color: #AAA;
+        }
     </style>
 </head>
 <body>
-    <h3>🔧 Merge Conflict Resolution</h3>
+    <h3>${isRnn ? '🧪 RNN Branch Classifier' : '🔧 Merge Conflict Resolution'}</h3>
     <div id="filepath">Resolving conflict...</div>
+    
+    <div class="branch-info" id="branchInfo">
+        <span>Selected:</span>
+        <span class="branch-badge" id="branchBadge">Branch ?</span>
+        <span class="confidence" id="confidence">Confidence: 0%</span>
+    </div>
+    
     <div id="output">
-        <span style="color: #6A9955;">// Generating optimal merge resolution...</span>
+        <span style="color: #6A9955;">${isRnn ? '// Classifying branches...' : '// Generating optimal merge resolution...'}</span>
         <span class="blinking-cursor">|</span>
     </div>
     <div class="button-container">
@@ -284,6 +374,7 @@ function getInitialWebviewContent() {
     <script>
         const vscode = acquireVsCodeApi();
         let currentFilePath = '';
+        let isRnn = ${isRnn};
 
         window.addEventListener('message', event => {
             const message = event.data;
@@ -291,6 +382,21 @@ function getInitialWebviewContent() {
                 currentFilePath = message.filepath;
                 document.getElementById('filepath').textContent = \`File: \${currentFilePath}\`;
                 animateResolution(message.resolution);
+            } else if (message.command === 'updateRnnResolution') {
+                currentFilePath = message.filepath;
+                document.getElementById('filepath').textContent = \`File: \${currentFilePath}\`;
+                
+                // Update the branch info section
+                const result = message.result;
+                const branchBadge = document.getElementById('branchBadge');
+                branchBadge.textContent = \`Branch \${result.selected_branch}\`;
+                branchBadge.className = \`branch-badge branch-\${result.selected_branch.toLowerCase()}\`;
+                
+                // Update confidence
+                document.getElementById('confidence').textContent = \`Confidence: \${Math.round(result.confidence * 100)}%\`;
+                
+                // Show the resolution
+                animateResolution(result.resolved_code);
             }
         });
 
@@ -298,20 +404,34 @@ function getInitialWebviewContent() {
             const outputDiv = document.getElementById("output");
             outputDiv.innerHTML = ''; // Clear previous content
             let i = 0;
+
+            const cursorSpan = document.createElement("span");
+            cursorSpan.className = "blinking-cursor";
+            cursorSpan.textContent = "|";
+            outputDiv.appendChild(cursorSpan);
+
             function animate() {
                 if (i < text.length) {
-                    outputDiv.textContent += text[i++];
-                    setTimeout(animate, 20);
+                    cursorSpan.insertAdjacentText('beforebegin', text[i++]);
+                    setTimeout(animate, 10); // typing speed restored
                 } else {
-                    outputDiv.innerHTML += '<span class="blinking-cursor">|</span>';
+                    cursorSpan.remove(); // ✅ Remove the blinking cursor from DOM
                     document.getElementById('acceptBtn').disabled = false;
                 }
             }
             animate();
         }
 
+
+
         function accept() {
-            const resolution = document.getElementById('output').textContent.replace(/\|$/, '').trim();
+            const outputDiv = document.getElementById('output');
+            const resolution = Array.from(outputDiv.childNodes)
+                .filter(node => node.nodeType === Node.TEXT_NODE)
+                .map(node => node.textContent)
+                .join('')
+                .trim();
+
             vscode.postMessage({ 
                 command: 'accept', 
                 resolution: resolution 

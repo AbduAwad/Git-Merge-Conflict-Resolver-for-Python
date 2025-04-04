@@ -12,7 +12,7 @@ def process_file_content(content):
     content = content.replace('\r\n', '\n')
     return content.strip()
 
-def prepare_dataset(dataset_dir="dataset/conflicts-py", max_samples=100):
+def prepare_dataset(dataset_dir="../dataset/conflicts-py", max_samples=None):
     """
     Loads up to `max_samples` merge conflict instances from the dataset directory.
     Each conflict instance is expected to be a folder containing O.py, A.py, B.py, and M.py.
