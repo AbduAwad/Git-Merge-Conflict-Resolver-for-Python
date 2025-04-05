@@ -1,3 +1,5 @@
+# This file is called by the plugin to resolve a merge conflict by using the trained RNN model.
+
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TF info/warning/debug logs
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Disable oneDNN logs

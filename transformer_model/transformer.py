@@ -369,7 +369,6 @@ def main():
     # Initialize the merge conflict resolver with dataset
     resolver = AdvancedMergeConflictResolver()
 
-    # Optional: Train the model
     resolver.train(epochs=3, learning_rate=5e-5, batch_size=16)
 
     output_dir = "merge_conflict_model"
@@ -392,64 +391,6 @@ def main():
     except Exception as e:
         print(f"⚠️ Failed to save model to Google Drive: {e}")
 
-
-    # Optional: Test the merge conflict resolution
-    test_case = {
-        "original": """
-def calculate_sum(a, b):
-    return a + b
-""",
-        "branch_a": """
-def calculate_sum(a, b):
-    # Added type hints
-    return a + b
-""",
-        "branch_b": """
-def calculate_sum(a, b):
-    return a + b  # Simple addition
-"""
-    }
-
-    merged_code = resolver.resolve_merge_conflict(
-        test_case["original"],
-        test_case["branch_a"],
-        test_case["branch_b"]
-    )
-
-    print("Merged Code:")
-    print(merged_code)
-
-    test_case2 = {
-        "original": """
-def fib(n):
-    if n <= 1:
-        return n
-    else:
-        return fib(n-1) + fib(n-2)
-        """,
-        "branch_a": """
-def fib(n):
-    if n <= 1:
-        return n
-    else:
-        return fib(n-1) + fib(n-2)
-        """,
-        "branch_b": """
-def fib(n):
-    if n <= 1:
-        return n
-    else:
-        return fib(n-1) + fib(n-2) + 1"""
-    }
-
-    merged_code = resolver.resolve_merge_conflict(
-        test_case2["original"],
-        test_case2["branch_a"],
-        test_case2["branch_b"]
-    )
-
-    print("Merged Code:")
-    print(merged_code)
 
 if __name__ == "__main__":
     main()
