@@ -66,7 +66,7 @@ export function activate(context: vscode.ExtensionContext) {
         });
 
         if (!selected) return;
-        vscode.window.showInformationMessage(`✅ Selected model: ${selected.label}`);
+        vscode.window.showInformationMessage(`Selected model: ${selected.label}`);
 
         if (selected.value === "codet5") {
             for (const conflict of conflicts) {
@@ -75,7 +75,7 @@ export function activate(context: vscode.ExtensionContext) {
                 if (resolution) {
                     if (activePanel) updateWebviewWithResolution(resolution, conflict);
                 } else {
-                    vscode.window.showErrorMessage('⚠️ Could not generate resolution');
+                    vscode.window.showErrorMessage('> Could not generate resolution');
                 }
             }
         } else if (selected.value === "rnn") {
@@ -86,14 +86,14 @@ export function activate(context: vscode.ExtensionContext) {
                     try {
                         const rnnResult = JSON.parse(result) as RnnResult;
                         if (rnnResult.error) {
-                            vscode.window.showErrorMessage(`⚠️ RNN model error: ${rnnResult.error}`);
+                            vscode.window.showErrorMessage(`RNN model error: ${rnnResult.error}`);
                         }
                         if (activePanel) updateWebviewWithRnnResolution(rnnResult, conflict);
                     } catch (e) {
-                        vscode.window.showErrorMessage('⚠️ Could not parse RNN model result');
+                        vscode.window.showErrorMessage('> Could not parse RNN model result');
                     }
                 } else {
-                    vscode.window.showErrorMessage('⚠️ Could not classify conflict');
+                    vscode.window.showErrorMessage('> Could not classify conflict');
                 }
             }
         }
@@ -178,11 +178,8 @@ function resolveWithPython(conflict: MergeConflict, modelType: 'codet5' | 'rnn')
             } catch (err) {
                 vscode.window.showErrorMessage(`❌ Failed to parse Python output:\n${output}\n\n⚠️ stderr:\n${error}`);
                 reject(error || 'Invalid output');
-            }
-            
+            } 
         });
-        
-
         child.stdin.write(input);
         child.stdin.end();
     });
