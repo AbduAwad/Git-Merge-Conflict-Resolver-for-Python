@@ -1,3 +1,14 @@
+"""
+“This script is used to fine-tune our transformer model on our dataset of merge conflicts.  
+It uses a sequence-to-sequence transformer model for code generation, a sentence transformer to obtain the semantic similarity in text, 
+and a dataset of synthetic merge conflicts to train and evaluate the model. 
+"""
+
+"""
+“We start by importing the necessary libraries: PyTorch for training and dataset handling, transformers for using CodeT5, 
+sentence_transformers for semantic embeddings, ast for syntax parsing, 
+and typical utilities like NumPy, JSON, and typing.”"""
+
 import torch
 import ast
 import numpy as np
@@ -7,7 +18,9 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from sentence_transformers import SentenceTransformer
 from torch.utils.data import Dataset, DataLoader
 
-class MergeConflictDataset(Dataset):
+# It loads merge conflict samples from a JSON file and returns individual examples that include the original code,
+#  branch A, branch B, and the resolved (merged) code
+class MergeConflictDataset(Dataset): # Standard Python Dataset class
     """
     Custom PyTorch Dataset for merge conflict data
     """
@@ -40,9 +53,15 @@ class MergeConflictDataset(Dataset):
         """
         return self.data[idx]
 
+# Class for resolving merge conflicts using transformer-based models and semantic analysis
+# “This is the main class that contains all the logic for preprocessing, training, and inference.”
+
 class AdvancedMergeConflictResolver:
-    def __init__(self,
-                 model_name="Salesforce/codet5-base",
+    # initialize the tokenizer and the CodeT5 model for code generation, 
+    # a sentence embedding model for semantic similarity, and load the dataset. 
+    # The models are automatically moved to GPU if available
+    def __init__(self, 
+                 model_name="Salesforce/codet5-base", 
                  embedding_model="all-MiniLM-L6-v2",
                  dataset_path="/content/drive/MyDrive/synthetic_dataset/synthetic_merge_conflicts_50000_batched.json"):
         """
@@ -53,16 +72,17 @@ class AdvancedMergeConflictResolver:
             embedding_model (str): Model for semantic embedding
             dataset_path (str): Path to merge conflict dataset
         """
+
         # Initialize tokenizer and code generation model
         print(f"Initializing code generation model: {model_name}")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
 
-        # Initialize semantic embedding model
+        # Initialize semantic embedding model for semantic similarity
         print(f"Initializing embedding model: {embedding_model}")
         self.embedding_model = SentenceTransformer(embedding_model)
 
-        # Load dataset (first 50 samples)
+        # Load dataset (first 50 samples) 
         self.dataset = MergeConflictDataset(dataset_path, num_samples=30000)
 
         # Move models to GPU if available
@@ -104,7 +124,9 @@ class AdvancedMergeConflictResolver:
 
     def _generate_code_embedding(self, code: str) -> np.ndarray:
         """
-        Generate semantic embedding for code snippet
+        This uses the sentence transformer to generate a 384-dimensional 
+        semantic embedding of the input code. 
+        It’s robust to syntax variations but captures overall meaning
 
         Args:
             code (str): Code text
@@ -120,7 +142,7 @@ class AdvancedMergeConflictResolver:
 
     def _compute_semantic_similarity(self, code1: str, code2: str) -> float:
         """
-        Compute semantic similarity between two code snippets
+        evaluate how semantically close two code snippets are
 
         Args:
             code1 (str): First code snippet
@@ -230,10 +252,7 @@ class AdvancedMergeConflictResolver:
             shuffle=shuffle
         )
 
-    def train(self,
-              epochs=3,
-              learning_rate=5e-5,
-              batch_size=16):
+    def train(self, epochs=3, learning_rate=5e-5, batch_size=16):
         """
         Fine-tune the model on the merge conflict dataset
 
@@ -243,18 +262,18 @@ class AdvancedMergeConflictResolver:
             batch_size (int): Batch size for training
         """
         # Prepare optimizer and dataloader
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
-        dataloader = self.prepare_dataloader(batch_size=batch_size)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate) # AdamW is a variant of Adam optimizer
+        dataloader = self.prepare_dataloader(batch_size=batch_size) # DataLoader for batching (will load the dataset in batches)
 
-        print(f"Starting training for {epochs} epochs")
-
-        for epoch in range(epochs):
-            self.model.train()
+        print(f"Starting training for {epochs} epochs") 
+ 
+        for epoch in range(epochs): # training loop over epochs
+            self.model.train() # Set model to training mode
             total_loss = 0
 
-            for batch in dataloader:
+            for batch in dataloader: # Iterate over batches
                 # Prepare inputs and labels
-                inputs = self.tokenizer(
+                inputs = self.tokenizer( # tokenize the input text
                     [
                         f"Resolve merge conflict between two code branches.\n"
                         f"Original code:\n{orig}\n\n"
@@ -269,7 +288,7 @@ class AdvancedMergeConflictResolver:
                     max_length=512
                 ).to(self.device)
 
-                labels = self.tokenizer(
+                labels = self.tokenizer( # tokenize the merged code or the class label
                     batch['merged'],
                     return_tensors="pt",
                     padding=True,
@@ -278,98 +297,29 @@ class AdvancedMergeConflictResolver:
                 ).input_ids.to(self.device)
 
                 # Forward pass
-                outputs = self.model(**inputs, labels=labels)
-                loss = outputs.loss
+                outputs = self.model(**inputs, labels=labels) # get the outputs of teh encoder-decoder transformer by passing in the inputs and labels
+                loss = outputs.loss # loss is the loss function of the model (cross-entropy loss)
 
-                # Backward pass and optimization
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                # Train using gradient descent
+                optimizer.zero_grad()  # clear previous gradients 
+                loss.backward() # compute gradients through backpropagation
+                optimizer.step() # update the model parameters, and go to the nexts step in the optimizer (gradient descent)
 
-                total_loss += loss.item()
+                total_loss += loss.item() # accumulate the loss
 
             # Log epoch statistics
-            avg_loss = total_loss / len(dataloader)
+            avg_loss = total_loss / len(dataloader) # average loss over the epoch
             print(f"Epoch {epoch+1}/{epochs}, Average Loss: {avg_loss:.4f}")
 
         print("Training completed")
 
-    def resolve_merge_conflict(
-        self,
-        original: str,
-        branch_a: str,
-        branch_b: str,
-        max_tries: int = 3
-    ) -> str:
-        """
-        Resolve merge conflict between two code branches
-
-        Args:
-            original (str): Original code
-            branch_a (str): Changes from first branch
-            branch_b (str): Changes from second branch
-            max_tries (int): Number of generation attempts
-
-        Returns:
-            str: Merged code
-        """
-        # Note: After training, this method will use the fine-tuned model
-        original = self._advanced_preprocessing(original)
-        branch_a = self._advanced_preprocessing(branch_a)
-        branch_b = self._advanced_preprocessing(branch_b)
-
-        input_text = (
-            f"Resolve merge conflict between two code branches.\n"
-            f"Original code:\n{original}\n\n"
-            f"Branch A changes:\n{branch_a}\n\n"
-            f"Branch B changes:\n{branch_b}\n\n"
-            f"Provide the merged code:"
-        )
-
-        # Generation and processing remain the same
-        candidates = []
-
-        for attempt in range(max_tries):
-            inputs = self.tokenizer(
-                input_text,
-                return_tensors="pt",
-                max_length=512,
-                truncation=True
-            ).to(self.device)
-
-            outputs = self.model.generate(
-                **inputs,
-                max_length=512,
-                num_return_sequences=1,
-                do_sample=True,
-                temperature=0.7 + (0.1 * attempt),
-                top_k=50,
-                top_p=0.95,
-                repetition_penalty=1.2
-            )
-
-            decoded_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-            decoded_output = self._advanced_preprocessing(decoded_output)
-
-            if self._validate_syntax(decoded_output):
-                quality_score = self._evaluate_merge_quality(original, decoded_output)
-                candidates.append((decoded_output, quality_score))
-
-        if candidates:
-            best_candidate = max(candidates, key=lambda x: x[1])[0]
-            return best_candidate
-
-        print("No valid merge candidates found. Attempting fallback merge.")
-        return original
-
 import os
 
-def main():
+def main(): # Runs the training and evaluation, and saves the model to google drive
     # Initialize the merge conflict resolver with dataset
-    resolver = AdvancedMergeConflictResolver()
+    resolver = AdvancedMergeConflictResolver() 
 
-    resolver.train(epochs=3, learning_rate=5e-5, batch_size=16)
+    resolver.train(epochs=3, learning_rate=5e-5, batch_size=16) # trains the model for 3 epochs
 
     output_dir = "merge_conflict_model"
     final_model_path = os.path.join(output_dir, "final_model")
