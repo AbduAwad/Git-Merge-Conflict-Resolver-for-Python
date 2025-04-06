@@ -1,6 +1,6 @@
 # VsCode Extension - Git Merge Conflict Resolver for Python (COMP 4107 Final Project)
 
-- **Overview:** This project is a Visual Studio Code extension that automatically resolves merge conflicts in Python files. It uses a Recurrent Neural Network to predict the correct resolution for a given conflict (Branch A / Branch B) as well as a fine-tuned codeT5 Transformer model to generate a custom merge conflict resolution when needed.
+- **Overview:** This project is a Visual Studio Code extension that automatically resolves merge conflicts in Python files. It uses a Trained Recurrent Neural Network to predict the correct resolution for a given conflict (Branch A / Branch B) as well as a fine-tuned codeT5 Transformer model to generate a custom merge conflict resolution when needed.
 
 _____
 
