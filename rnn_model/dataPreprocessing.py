@@ -5,7 +5,9 @@ from sklearn import logger
 from sklearn.model_selection import train_test_split
 
 def process_file_content(content):
-    """Clean and normalize file content"""
+    """
+    Reformats the content once the file opened
+    """
     # Remove excessive whitespace
     content = re.sub(r'\n\s*\n', '\n\n', content)
     # Normalize line endings
@@ -16,6 +18,7 @@ def prepare_dataset(dataset_dir="../dataset/conflicts-py", max_samples=None):
     """
     Loads up to `max_samples` merge conflict instances from the dataset directory.
     Each conflict instance is expected to be a folder containing O.py, A.py, B.py, and M.py.
+    After the dataset loads, split into training, validation and testing sets
     """
     examples = []
     
@@ -46,7 +49,10 @@ def prepare_dataset(dataset_dir="../dataset/conflicts-py", max_samples=None):
     return train_examples, val_examples, test_examples
 
 def parse_example_from_files(original_file, branch_a_file, branch_b_file, merged_file):
-    """Parse example from file paths"""
+    """
+    Parse examples from Original, Branch A, Branch B and Merged files
+    Each call the process_file_content() function
+    """
     try:
         with open(original_file, 'r', encoding='utf-8') as f:
             original = process_file_content(f.read())
