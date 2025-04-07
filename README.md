@@ -10,8 +10,6 @@
     <img src="system_architecture.png" alt="System Architecture">
 </p>
 
-
-
 _____
 
 ### Group Number: 89
